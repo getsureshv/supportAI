@@ -16,6 +16,26 @@ interface FieldUpdate {
   value: string;
 }
 
+/**
+ * Strip <scope_update> tags and leftover JSON blocks from AI responses
+ * so the user only sees the conversational text.
+ */
+function cleanAssistantMessage(text: string): string {
+  // Remove <scope_update field="...">...</scope_update> tags
+  let cleaned = text.replace(/<scope_update\s+field="[^"]*">[\s\S]*?<\/scope_update>/g, '');
+
+  // Remove JSON code blocks like ```json ... ```
+  cleaned = cleaned.replace(/```json\s*\{[\s\S]*?\}\s*```/g, '');
+
+  // Remove standalone JSON objects with "type": "field_update"
+  cleaned = cleaned.replace(/\{\s*"type"\s*:\s*"field_update"[\s\S]*?\}/g, '');
+
+  // Clean up extra whitespace left behind
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n').trim();
+
+  return cleaned;
+}
+
 export default function ScopeArchitectPage({ params }: { params: { id: string } }) {
   const [project, setProject] = useState<ApiProject | null>(null);
   const [loadingProject, setLoadingProject] = useState(true);
@@ -321,7 +341,9 @@ export default function ScopeArchitectPage({ params }: { params: { id: string } 
                 }`}
               >
                 <p className="text-sm leading-relaxed whitespace-pre-wrap">
-                  {message.content}
+                  {message.type === 'assistant'
+                    ? cleanAssistantMessage(message.content)
+                    : message.content}
                   {isStreaming && message.type === 'assistant' && message === messages[messages.length - 1] && !message.content && (
                     <span className="inline-flex gap-1 ml-1">
                       <span className="w-1.5 h-1.5 bg-white/40 rounded-full animate-pulse" />

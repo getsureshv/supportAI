@@ -62,6 +62,7 @@ export class AuthController {
         providerType: user.providerType,
         name: user.name,
         phone: user.phone,
+        languagePreference: user.languagePreference,
         onboardingComplete: user.onboardingComplete,
         verificationStatus: user.verificationStatus,
       },

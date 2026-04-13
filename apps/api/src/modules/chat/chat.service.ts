@@ -10,31 +10,109 @@ export interface ListConversationsParams {
   limit: number;
 }
 
-const SCOPE_ARCHITECT_SYSTEM_PROMPT = `You are the DBM AI Scope Architect — a Senior Construction Project Manager. Your job is to interview the client to build a complete Scope of Work.
+// ─── Role-Specific Prompt Builder ──────────────────────────
 
-Follow this 4-step sequence:
-1. Identify the Core — understand if this is a gut renovation vs a specific repair/upgrade
-2. Extract Technicals — gather dimensions, square footage, material grades, specifications
-3. Understand the Why — learn about aesthetic preferences, desired vibe, functional needs
-4. Define Logistics — determine start dates, timeline preferences, site constraints, access issues
+function buildSystemPrompt(context: {
+  role: string;
+  userName: string;
+  projectTitle: string;
+  projectType: string;
+  language: string;
+  currentScope: Record<string, string | null>;
+}): string {
+  const { role, userName, projectTitle, projectType, language, currentScope } = context;
 
-Guidelines:
-- Ask ONE question at a time
-- Be warm but professional
-- Listen carefully and dig deeper when needed
-- After each answer, determine which ScopeDocument field(s) to update
-- Return a JSON tool call with field name and new value
-- Build incrementally toward a complete scope
+  const langInstruction =
+    language && language !== 'en'
+      ? `\n\nIMPORTANT: The user prefers ${getLanguageName(language)}. Respond in ${getLanguageName(language)}, but keep scope field values in English for contractor compatibility.`
+      : '';
 
-When you have gathered enough information to populate a field, return a JSON response:
-{
-  "type": "field_update",
-  "field": "fieldName",
-  "value": "extracted value or structured data",
-  "nextQuestion": "Your warm follow-up question"
+  const roleContext =
+    role === 'OWNER'
+      ? `You are speaking with ${userName}, the property OWNER. They may not know construction jargon — use plain, friendly language. Explain technical terms when you use them. Focus on what they want the space to look and feel like, their daily routines, and their budget comfort level.`
+      : role === 'PROVIDER'
+        ? `You are speaking with ${userName}, a construction PROVIDER. Use industry-standard terminology. Be direct and efficient — they understand trade language. Focus on specifications, tolerances, and technical requirements.`
+        : `You are speaking with ${userName}. Be professional and clear.`;
+
+  // Build a summary of what's already filled in
+  const filledFields = Object.entries(currentScope)
+    .filter(([, v]) => v)
+    .map(([k, v]) => `  - ${k}: ${v}`)
+    .join('\n');
+
+  const scopeStatus = filledFields
+    ? `\n\nScope fields already populated:\n${filledFields}\n\nDo NOT re-ask about information already captured above. Build on what you know.`
+    : '\n\nNo scope fields have been filled yet. Start from the beginning.';
+
+  return `You are the DBM AI Scope Architect — a Senior Construction Project Manager with 20+ years of experience. You interview clients to build a comprehensive, contractor-ready Scope of Work (SOW).
+
+${roleContext}
+
+PROJECT: "${projectTitle}" (${projectType})
+${scopeStatus}
+${langInstruction}
+
+─── INTERVIEW STRUCTURE ───
+Follow this 4-phase sequence. Move naturally between phases based on what the user shares:
+
+Phase 1 — CORE SCOPE: What is the project? Gut renovation vs. cosmetic refresh vs. new addition? What spaces are involved?
+Phase 2 — TECHNICALS: Dimensions, square footage, material grades, fixtures, appliances, structural changes.
+Phase 3 — AESTHETICS & PURPOSE: Design style, color palette, desired feel, daily use patterns, inspiration.
+Phase 4 — LOGISTICS: Preferred start date, timeline expectations, site access, pets/occupancy during work, budget range.
+
+─── CONVERSATION RULES ───
+1. Ask ONE focused question at a time. Never dump a list of questions.
+2. Acknowledge what the user said before asking the next question. Show you listened.
+3. Be warm, conversational, and encouraging — not robotic or clinical.
+4. When the user gives vague answers ("something nice"), probe gently ("What does 'nice' look like to you — more modern and clean, or warm and classic?").
+5. NEVER show raw JSON, code blocks, or technical markup to the user.
+6. Keep responses concise — 2-4 sentences max, then your question.
+
+─── SCOPE DATA EXTRACTION ───
+When you gather enough info to populate a scope field, include a hidden extraction tag at the END of your response:
+
+<scope_update field="fieldName">extracted value written for contractor clarity</scope_update>
+
+Valid field names: projectScope, dimensions, materialGrade, timeline, milestones, specialConditions, preferredStartDate, siteConstraints, aestheticPreferences
+
+Rules for extraction:
+- Write values in professional, contractor-ready language (not the user's casual words)
+- You can include multiple <scope_update> tags if the user gave enough info for several fields
+- NEVER mention these tags or the extraction process to the user
+- The tags must come AFTER your conversational response, never in the middle
+
+─── EXAMPLE ───
+User: "I want to redo my kitchen, it's about 12x15 and I hate the old laminate counters"
+
+Your response:
+"A 12×15 kitchen gives you great space to work with! And I totally understand wanting to ditch the laminate — it really dates a kitchen. Are you thinking of going with a natural stone like granite or quartz, or something more modern like a solid surface?"
+
+<scope_update field="projectScope">Full kitchen renovation including countertop replacement. Existing laminate countertops to be removed and replaced.</scope_update>
+<scope_update field="dimensions">Kitchen area approximately 12 ft × 15 ft (180 sq ft)</scope_update>`;
 }
 
-Keep responses concise and conversational. Your goal is to extract actionable project details that contractors can use for estimation and planning.`;
+function getLanguageName(code: string): string {
+  const map: Record<string, string> = {
+    en: 'English',
+    es: 'Spanish',
+    fr: 'French',
+    zh: 'Chinese',
+    hi: 'Hindi',
+    ar: 'Arabic',
+    pt: 'Portuguese',
+    ko: 'Korean',
+    ja: 'Japanese',
+    de: 'German',
+    it: 'Italian',
+    vi: 'Vietnamese',
+    tl: 'Tagalog',
+    pl: 'Polish',
+    ru: 'Russian',
+  };
+  return map[code] || code;
+}
+
+// ─── Service ───────────────────────────────────────────────
 
 @Injectable()
 export class ChatService {
@@ -63,6 +141,16 @@ export class ChatService {
       return;
     }
     try {
+      // Load user profile for role-specific prompt
+      const user = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          name: true,
+          role: true,
+          languagePreference: true,
+        },
+      });
+
       // Load project and existing scope document
       const project = await this.prisma.project.findUnique({
         where: { id: projectId },
@@ -81,12 +169,8 @@ export class ChatService {
         throw new HttpException('Project not found', HttpStatus.NOT_FOUND);
       }
 
-      // Check ownership using ownerId field
       if (project.ownerId !== userId) {
-        throw new HttpException(
-          'Unauthorized to access this project',
-          HttpStatus.FORBIDDEN,
-        );
+        throw new HttpException('Unauthorized to access this project', HttpStatus.FORBIDDEN);
       }
 
       let scopeDocument = project.scopeDocument;
@@ -104,23 +188,40 @@ export class ChatService {
         });
       }
 
-      // Verify scopeDocument was created successfully
       if (!scopeDocument) {
         throw new NotFoundException('Failed to create scope document');
       }
 
+      // Build role-aware system prompt with current scope state
+      const systemPrompt = buildSystemPrompt({
+        role: user?.role || 'OWNER',
+        userName: user?.name || 'there',
+        projectTitle: project.title,
+        projectType: project.type,
+        language: user?.languagePreference || 'en',
+        currentScope: {
+          projectScope: scopeDocument.projectScope,
+          dimensions: scopeDocument.dimensions,
+          materialGrade: scopeDocument.materialGrade,
+          timeline: scopeDocument.timeline,
+          milestones: scopeDocument.milestones,
+          specialConditions: scopeDocument.specialConditions,
+          preferredStartDate: scopeDocument.preferredStartDate
+            ? scopeDocument.preferredStartDate.toISOString()
+            : null,
+          siteConstraints: scopeDocument.siteConstraints,
+          aestheticPreferences: scopeDocument.aestheticPreferences,
+        },
+      });
+
       // Build conversation history from previous turns
       const conversationHistory: Anthropic.Messages.MessageParam[] =
-        scopeDocument.interviewTurns.map((turn) => [
-          {
-            role: 'user' as const,
-            content: turn.questionText,
-          },
-          {
-            role: 'assistant' as const,
-            content: turn.answerText || '',
-          },
-        ]).flat();
+        scopeDocument.interviewTurns
+          .map((turn) => [
+            { role: 'user' as const, content: turn.questionText },
+            { role: 'assistant' as const, content: turn.answerText || '' },
+          ])
+          .flat();
 
       // Add current message
       conversationHistory.push({
@@ -130,17 +231,16 @@ export class ChatService {
 
       // Stream response from Claude
       let fullResponse = '';
-      let fieldUpdates: any[] = [];
 
       const stream = await this.anthropic.messages.create({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 1024,
-        system: SCOPE_ARCHITECT_SYSTEM_PROMPT,
+        system: systemPrompt,
         messages: conversationHistory,
         stream: true,
       });
 
-      // Process stream and send to client
+      // Process stream — send text deltas but buffer scope_update tags
       for await (const event of stream) {
         if (
           event.type === 'content_block_delta' &&
@@ -149,7 +249,7 @@ export class ChatService {
           const text = event.delta.text;
           fullResponse += text;
 
-          // Send text delta to client
+          // Send text delta to client (frontend will strip tags)
           res.write(
             `data: ${JSON.stringify({
               type: 'text_delta',
@@ -159,45 +259,46 @@ export class ChatService {
         }
       }
 
-      // Try to parse field updates from response
-      try {
-        const jsonMatch = fullResponse.match(/\{[\s\S]*?\}/);
-        if (jsonMatch) {
-          const parsed = JSON.parse(jsonMatch[0]);
-          if (parsed.type === 'field_update') {
-            fieldUpdates.push(parsed);
-            // Update scope document with extracted field
-            await this.updateScopeDocumentField(
-              scopeDocument.id,
-              parsed.field,
-              parsed.value,
-            );
-          }
-        }
-      } catch (parseError) {
-        // Response might not contain structured data, which is fine
+      // Extract scope updates from the complete response
+      const fieldUpdates = this.extractScopeUpdates(fullResponse);
+
+      // Apply field updates to scope document
+      for (const update of fieldUpdates) {
+        await this.updateScopeDocumentField(
+          scopeDocument.id,
+          update.field,
+          update.value,
+        );
       }
 
-      // Determine next turn number
-      const nextTurnNumber = scopeDocument.interviewTurns.length + 1;
+      // Recalculate completeness
+      if (fieldUpdates.length > 0) {
+        await this.recalculateCompleteness(scopeDocument.id);
+      }
 
-      // Save conversation turn with correct field names
+      // Save conversation turn (store full response including tags for history)
+      const nextTurnNumber = scopeDocument.interviewTurns.length + 1;
       await this.prisma.scopeInterviewTurn.create({
         data: {
           scopeDocumentId: scopeDocument.id,
           turnNumber: nextTurnNumber,
           questionText: userMessage,
           answerText: fullResponse,
-          fieldPopulated: fieldUpdates.length > 0 ? fieldUpdates[0].field : null,
+          fieldPopulated: fieldUpdates.length > 0
+            ? fieldUpdates.map((u) => u.field).join(',')
+            : null,
         },
       });
 
-      // Send final response with metadata
+      // Send completion event with field updates
       res.write(
         `data: ${JSON.stringify({
           type: 'complete',
           turnId: scopeDocument.id,
-          fieldUpdates,
+          fieldUpdates: fieldUpdates.map((u) => ({
+            field: u.field,
+            value: u.value,
+          })),
         })}\n\n`,
       );
 
@@ -216,6 +317,75 @@ export class ChatService {
     }
   }
 
+  /**
+   * Extract <scope_update field="...">value</scope_update> tags from response
+   */
+  private extractScopeUpdates(
+    text: string,
+  ): Array<{ field: string; value: string }> {
+    const updates: Array<{ field: string; value: string }> = [];
+    const regex = /<scope_update\s+field="(\w+)">([\s\S]*?)<\/scope_update>/g;
+    let match: RegExpExecArray | null;
+
+    while ((match = regex.exec(text)) !== null) {
+      const field = match[1];
+      const value = match[2].trim();
+      if (field && value) {
+        updates.push({ field, value });
+      }
+    }
+
+    // Fallback: try old JSON format for backward compat
+    if (updates.length === 0) {
+      try {
+        const jsonMatch = text.match(/\{\s*"type"\s*:\s*"field_update"[\s\S]*?\}/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          if (parsed.field && parsed.value) {
+            updates.push({ field: parsed.field, value: parsed.value });
+          }
+        }
+      } catch {
+        // Not valid JSON, skip
+      }
+    }
+
+    return updates;
+  }
+
+  /**
+   * Recalculate scope completeness based on filled fields
+   */
+  private async recalculateCompleteness(scopeDocumentId: string): Promise<void> {
+    const doc = await this.prisma.scopeDocument.findUnique({
+      where: { id: scopeDocumentId },
+    });
+    if (!doc) return;
+
+    const fields = [
+      doc.projectScope,
+      doc.dimensions,
+      doc.materialGrade,
+      doc.timeline,
+      doc.milestones,
+      doc.specialConditions,
+      doc.preferredStartDate,
+      doc.siteConstraints,
+      doc.aestheticPreferences,
+    ];
+
+    const filled = fields.filter((f) => f !== null && f !== '').length;
+    const percent = Math.round((filled / fields.length) * 100);
+
+    await this.prisma.scopeDocument.update({
+      where: { id: scopeDocumentId },
+      data: {
+        completenessPercent: percent,
+        status: percent >= 65 ? 'IN_PROGRESS' : 'DRAFT',
+      },
+    });
+  }
+
   async listUserConversations(
     params: ListConversationsParams,
   ): Promise<{
@@ -228,49 +398,26 @@ export class ChatService {
     const skip = cursor ? 1 : 0;
     const cursorObj = cursor ? { id: cursor } : undefined;
 
-    // Get scope documents (conversations) for user's projects
     const conversations = await this.prisma.scopeDocument.findMany({
-      where: {
-        project: {
-          ownerId: userId,
-        },
-      },
+      where: { project: { ownerId: userId } },
       include: {
-        project: {
-          select: {
-            id: true,
-            title: true,
-          },
-        },
+        project: { select: { id: true, title: true } },
         interviewTurns: {
-          select: {
-            id: true,
-            createdAt: true,
-          },
-          orderBy: {
-            createdAt: 'desc',
-          },
+          select: { id: true, createdAt: true },
+          orderBy: { createdAt: 'desc' },
           take: 1,
         },
       },
       take: limit + 1,
       skip,
       cursor: cursorObj,
-      orderBy: {
-        updatedAt: 'desc',
-      },
+      orderBy: { updatedAt: 'desc' },
     });
 
-    // Get total count
     const total = await this.prisma.scopeDocument.count({
-      where: {
-        project: {
-          ownerId: userId,
-        },
-      },
+      where: { project: { ownerId: userId } },
     });
 
-    // Handle pagination
     const hasNextPage = conversations.length > limit;
     const conversationList = hasNextPage
       ? conversations.slice(0, limit)
@@ -279,25 +426,17 @@ export class ChatService {
       ? conversationList[conversationList.length - 1]?.id
       : undefined;
 
-    // Map to response format
     const formattedConversations = conversationList.map((conv) => ({
       id: conv.id,
       projectId: conv.projectId,
       projectName: conv.project.title,
       status: conv.status,
       lastUpdated: conv.updatedAt,
-      lastTurnAt:
-        conv.interviewTurns.length > 0
-          ? conv.interviewTurns[0].createdAt
-          : null,
+      lastTurnAt: conv.interviewTurns.length > 0 ? conv.interviewTurns[0].createdAt : null,
       turnCount: conv.interviewTurns.length,
     }));
 
-    return {
-      conversations: formattedConversations,
-      nextCursor,
-      total,
-    };
+    return { conversations: formattedConversations, nextCursor, total };
   }
 
   private async updateScopeDocumentField(
@@ -305,10 +444,7 @@ export class ChatService {
     field: string,
     value: any,
   ): Promise<void> {
-    const updateData: any = {};
-
-    // Map field names to scope document fields
-    const fieldMapping: Record<string, string> = {
+    const validFields: Record<string, string> = {
       projectScope: 'projectScope',
       dimensions: 'dimensions',
       materialGrade: 'materialGrade',
@@ -320,16 +456,15 @@ export class ChatService {
       aestheticPreferences: 'aestheticPreferences',
     };
 
-    const mappedField = fieldMapping[field] || field;
-    if (mappedField) {
-      updateData[mappedField] = value;
-    }
+    const mappedField = validFields[field];
+    if (!mappedField) return;
 
-    if (Object.keys(updateData).length > 0) {
-      await this.prisma.scopeDocument.update({
-        where: { id: scopeDocumentId },
-        data: updateData,
-      });
-    }
+    const updateData: Record<string, any> = {};
+    updateData[mappedField] = value;
+
+    await this.prisma.scopeDocument.update({
+      where: { id: scopeDocumentId },
+      data: updateData,
+    });
   }
 }
