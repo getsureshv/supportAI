@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Send, AlertCircle, Loader2, ArrowLeft, Sparkles, Mic, MicOff } from 'lucide-react';
+import { Send, AlertCircle, Loader2, ArrowLeft, Sparkles, Mic, MicOff, Pencil, Plus } from 'lucide-react';
 import Link from 'next/link';
 import { projects as projectsApi, ApiProject } from '../../../../../lib/api';
 
@@ -67,6 +67,8 @@ export default function ScopeArchitectPage({ params }: { params: { id: string } 
   const [quickOptions, setQuickOptions] = useState<string[]>([]);
   const [isListening, setIsListening] = useState(false);
   const [voiceSupported, setVoiceSupported] = useState(false);
+  const [activeSection, setActiveSection] = useState<string | null>(null);
+  const [recentlyUpdated, setRecentlyUpdated] = useState<Set<string>>(new Set());
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -181,6 +183,69 @@ export default function ScopeArchitectPage({ params }: { params: { id: string } 
     }
   }, [isListening]);
 
+  // Section definitions with field keys and chat prompts
+  const SCOPE_SECTIONS: Array<{
+    fieldKey: string;
+    label: string;
+    emptyPrompt: string;
+    editPrompt: string;
+  }> = [
+    {
+      fieldKey: 'projectScope',
+      label: 'Project Scope',
+      emptyPrompt: "Let's define the overall project scope. What's the main goal of this project?",
+      editPrompt: "I'd like to update the project scope. Here's what I want to change:",
+    },
+    {
+      fieldKey: 'dimensions',
+      label: 'Dimensions & Specifications',
+      emptyPrompt: "Let's talk about dimensions and specifications. What are the measurements of the space?",
+      editPrompt: "I need to update the dimensions and specifications:",
+    },
+    {
+      fieldKey: 'materialGrade',
+      label: 'Materials & Grade',
+      emptyPrompt: "Let's discuss materials. What quality level and materials are you considering?",
+      editPrompt: "I want to change the materials selection:",
+    },
+    {
+      fieldKey: 'timeline',
+      label: 'Timeline',
+      emptyPrompt: "Let's set the project timeline. How long do you expect this project to take?",
+      editPrompt: "I need to adjust the timeline:",
+    },
+    {
+      fieldKey: 'milestones',
+      label: 'Milestones',
+      emptyPrompt: "Let's define project milestones. What are the key phases or checkpoints?",
+      editPrompt: "I want to update the project milestones:",
+    },
+    {
+      fieldKey: 'specialConditions',
+      label: 'Special Conditions',
+      emptyPrompt: "Are there any special conditions? Think permits, HOA rules, structural concerns, or unique requirements.",
+      editPrompt: "I need to update the special conditions:",
+    },
+    {
+      fieldKey: 'preferredStartDate',
+      label: 'Preferred Start Date',
+      emptyPrompt: "When would you ideally like the project to start?",
+      editPrompt: "I want to change the preferred start date:",
+    },
+    {
+      fieldKey: 'siteConstraints',
+      label: 'Site Constraints',
+      emptyPrompt: "Let's discuss site constraints. Any access issues, parking, neighbors, pets, or occupancy during work?",
+      editPrompt: "I need to update the site constraints:",
+    },
+    {
+      fieldKey: 'aestheticPreferences',
+      label: 'Aesthetic Preferences',
+      emptyPrompt: "Let's talk aesthetics. What style, colors, or design feel are you going for?",
+      editPrompt: "I'd like to update my aesthetic preferences:",
+    },
+  ];
+
   const sendMessage = useCallback(
     async (text: string) => {
       if (!text.trim() || isStreaming) return;
@@ -259,6 +324,21 @@ export default function ScopeArchitectPage({ params }: { params: { id: string } 
                 );
               } else if (event.type === 'complete') {
                 if (event.fieldUpdates?.length > 0) {
+                  // Track which fields were just updated for highlight animation
+                  const updatedFields = new Set<string>(
+                    event.fieldUpdates.map((u: FieldUpdate) => u.field),
+                  );
+                  setRecentlyUpdated(updatedFields);
+
+                  // Clear highlight after 3 seconds
+                  setTimeout(() => setRecentlyUpdated(new Set()), 3000);
+
+                  // Clear active section since it was just updated
+                  if (activeSection && updatedFields.has(activeSection)) {
+                    setActiveSection(null);
+                  }
+
+                  // Refresh project data to get updated scope
                   projectsApi.get(params.id).then(setProject).catch(() => {});
                 }
                 // Extract quick options from the full response
@@ -295,6 +375,21 @@ export default function ScopeArchitectPage({ params }: { params: { id: string } 
     sendMessage(option);
   };
 
+  const handleSectionClick = useCallback(
+    (fieldKey: string, hasValue: boolean) => {
+      if (isStreaming) return;
+
+      const section = SCOPE_SECTIONS.find((s) => s.fieldKey === fieldKey);
+      if (!section) return;
+
+      setActiveSection(fieldKey);
+
+      const prompt = hasValue ? section.editPrompt : section.emptyPrompt;
+      sendMessage(prompt);
+    },
+    [isStreaming, sendMessage],
+  );
+
   if (loadingProject) {
     return (
       <div className="flex justify-center items-center h-full">
@@ -317,20 +412,21 @@ export default function ScopeArchitectPage({ params }: { params: { id: string } 
   const scope = project.scopeDocument;
   const completeness = scope?.completenessPercent ?? 0;
 
-  const scopeSections: { label: string; value: string | null }[] = [
-    { label: 'Project Scope', value: scope?.projectScope ?? null },
-    { label: 'Dimensions & Specifications', value: scope?.dimensions ?? null },
-    { label: 'Materials & Grade', value: scope?.materialGrade ?? null },
-    { label: 'Timeline', value: scope?.timeline ?? null },
-    { label: 'Milestones', value: scope?.milestones ?? null },
-    { label: 'Special Conditions', value: scope?.specialConditions ?? null },
-    { label: 'Preferred Start Date', value: scope?.preferredStartDate ?? null },
-    { label: 'Site Constraints', value: scope?.siteConstraints ?? null },
-    { label: 'Aesthetic Preferences', value: scope?.aestheticPreferences ?? null },
-  ];
+  // Map field keys to current scope values
+  const scopeFieldValues: Record<string, string | null> = {
+    projectScope: scope?.projectScope ?? null,
+    dimensions: scope?.dimensions ?? null,
+    materialGrade: scope?.materialGrade ?? null,
+    timeline: scope?.timeline ?? null,
+    milestones: scope?.milestones ?? null,
+    specialConditions: scope?.specialConditions ?? null,
+    preferredStartDate: scope?.preferredStartDate ?? null,
+    siteConstraints: scope?.siteConstraints ?? null,
+    aestheticPreferences: scope?.aestheticPreferences ?? null,
+  };
 
-  const populatedSections = scopeSections.filter((s) => s.value);
-  const emptySections = scopeSections.filter((s) => !s.value);
+  const populatedSections = SCOPE_SECTIONS.filter((s) => scopeFieldValues[s.fieldKey]);
+  const emptySections = SCOPE_SECTIONS.filter((s) => !scopeFieldValues[s.fieldKey]);
 
   return (
     <div className="flex h-full bg-gradient-to-br from-navy via-navy-dark to-navy-light">
@@ -377,31 +473,87 @@ export default function ScopeArchitectPage({ params }: { params: { id: string } 
             <p className="text-white/60 text-sm">{project.title} &mdash; {project.type}</p>
           </div>
 
-          {populatedSections.map((section) => (
-            <section key={section.label}>
-              <h2 className="text-lg font-semibold text-gold mb-3">{section.label}</h2>
-              <div className="bg-white/5 border border-white/10 rounded-lg p-4">
-                <p className="text-white/80 text-sm leading-relaxed whitespace-pre-wrap">
-                  {section.value}
-                </p>
-              </div>
-            </section>
-          ))}
+          {populatedSections.map((section) => {
+            const isActive = activeSection === section.fieldKey;
+            const isUpdated = recentlyUpdated.has(section.fieldKey);
+            return (
+              <section
+                key={section.fieldKey}
+                onClick={() => handleSectionClick(section.fieldKey, true)}
+                className={`group cursor-pointer rounded-xl transition-all duration-300 ${
+                  isUpdated
+                    ? 'ring-2 ring-gold/50 animate-pulse'
+                    : isActive
+                      ? 'ring-2 ring-gold/30'
+                      : 'hover:ring-1 hover:ring-white/20'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-lg font-semibold text-gold">{section.label}</h2>
+                  <span
+                    className={`flex items-center gap-1 text-xs transition-opacity ${
+                      isActive
+                        ? 'text-gold opacity-100'
+                        : 'text-white/30 opacity-0 group-hover:opacity-100'
+                    }`}
+                  >
+                    <Pencil size={12} />
+                    {isActive ? 'Editing...' : 'Click to edit'}
+                  </span>
+                </div>
+                <div
+                  className={`border rounded-lg p-4 transition-colors ${
+                    isUpdated
+                      ? 'bg-gold/10 border-gold/30'
+                      : isActive
+                        ? 'bg-gold/5 border-gold/20'
+                        : 'bg-white/5 border-white/10 group-hover:border-white/20'
+                  }`}
+                >
+                  <p className="text-white/80 text-sm leading-relaxed whitespace-pre-wrap">
+                    {scopeFieldValues[section.fieldKey]}
+                  </p>
+                </div>
+              </section>
+            );
+          })}
 
           {emptySections.length > 0 && (
             <div className="space-y-3">
               <h3 className="text-sm font-medium text-white/40 uppercase tracking-wide">
-                Still Needed
+                Still Needed — click to start
               </h3>
               <div className="grid grid-cols-2 gap-2">
-                {emptySections.map((section) => (
-                  <div
-                    key={section.label}
-                    className="bg-white/5 border border-dashed border-white/10 rounded-lg p-3"
-                  >
-                    <p className="text-white/30 text-xs">{section.label}</p>
-                  </div>
-                ))}
+                {emptySections.map((section) => {
+                  const isActive = activeSection === section.fieldKey;
+                  const isUpdated = recentlyUpdated.has(section.fieldKey);
+                  return (
+                    <button
+                      key={section.fieldKey}
+                      onClick={() => handleSectionClick(section.fieldKey, false)}
+                      disabled={isStreaming}
+                      className={`text-left border rounded-lg p-3 transition-all duration-300 group ${
+                        isUpdated
+                          ? 'bg-gold/10 border-gold/30 ring-2 ring-gold/50'
+                          : isActive
+                            ? 'bg-gold/5 border-gold/30 ring-1 ring-gold/20'
+                            : 'bg-white/5 border-dashed border-white/10 hover:border-gold/30 hover:bg-gold/5'
+                      } disabled:opacity-50 disabled:cursor-not-allowed`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <p className={`text-xs ${isActive ? 'text-gold' : 'text-white/30 group-hover:text-white/60'}`}>
+                          {section.label}
+                        </p>
+                        <Plus
+                          size={12}
+                          className={`transition-opacity ${
+                            isActive ? 'text-gold opacity-100' : 'text-white/20 opacity-0 group-hover:opacity-100'
+                          }`}
+                        />
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}
