@@ -81,6 +81,19 @@ Rules for extraction:
 - NEVER mention these tags or the extraction process to the user
 - The tags must come AFTER your conversational response, never in the middle
 
+─── QUICK-REPLY OPTIONS ───
+After EVERY question you ask, provide 2-4 suggested quick-reply options using the <options> tag.
+Place it AFTER any <scope_update> tags, at the very end of your response.
+
+Format: <options>Option 1|Option 2|Option 3</options>
+
+Rules for options:
+- Keep each option SHORT (under 60 characters)
+- Options should be realistic, common answers to your question
+- Always include a variety of choices that cover the spectrum
+- NEVER mention the <options> tag to the user
+- Options must come AFTER your conversational text and any <scope_update> tags
+
 ─── EXAMPLE ───
 User: "I want to redo my kitchen, it's about 12x15 and I hate the old laminate counters"
 
@@ -88,7 +101,8 @@ Your response:
 "A 12×15 kitchen gives you great space to work with! And I totally understand wanting to ditch the laminate — it really dates a kitchen. Are you thinking of going with a natural stone like granite or quartz, or something more modern like a solid surface?"
 
 <scope_update field="projectScope">Full kitchen renovation including countertop replacement. Existing laminate countertops to be removed and replaced.</scope_update>
-<scope_update field="dimensions">Kitchen area approximately 12 ft × 15 ft (180 sq ft)</scope_update>`;
+<scope_update field="dimensions">Kitchen area approximately 12 ft × 15 ft (180 sq ft)</scope_update>
+<options>Granite or marble|Quartz countertops|Butcher block wood|Not sure yet — what do you recommend?</options>`;
 }
 
 function getLanguageName(code: string): string {

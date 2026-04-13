@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import { Send, AlertCircle, Loader2, ArrowLeft, Sparkles } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { Send, AlertCircle, Loader2, ArrowLeft, Sparkles, Mic, MicOff } from 'lucide-react';
 import Link from 'next/link';
 import { projects as projectsApi, ApiProject } from '../../../../../lib/api';
 
@@ -17,23 +17,41 @@ interface FieldUpdate {
 }
 
 /**
- * Strip <scope_update> tags and leftover JSON blocks from AI responses
- * so the user only sees the conversational text.
+ * Strip hidden tags from AI responses so the user only sees conversational text.
+ * Removes: <scope_update>, <options>, JSON code blocks, field_update JSON objects.
  */
 function cleanAssistantMessage(text: string): string {
-  // Remove <scope_update field="...">...</scope_update> tags
-  let cleaned = text.replace(/<scope_update\s+field="[^"]*">[\s\S]*?<\/scope_update>/g, '');
+  let cleaned = text;
 
-  // Remove JSON code blocks like ```json ... ```
+  // Remove <scope_update field="...">...</scope_update>
+  cleaned = cleaned.replace(/<scope_update\s+field="[^"]*">[\s\S]*?<\/scope_update>/g, '');
+
+  // Remove <options>...</options>
+  cleaned = cleaned.replace(/<options>[\s\S]*?<\/options>/g, '');
+
+  // Remove JSON code blocks
   cleaned = cleaned.replace(/```json\s*\{[\s\S]*?\}\s*```/g, '');
 
-  // Remove standalone JSON objects with "type": "field_update"
+  // Remove standalone field_update JSON
   cleaned = cleaned.replace(/\{\s*"type"\s*:\s*"field_update"[\s\S]*?\}/g, '');
 
-  // Clean up extra whitespace left behind
+  // Clean up extra whitespace
   cleaned = cleaned.replace(/\n{3,}/g, '\n\n').trim();
 
   return cleaned;
+}
+
+/**
+ * Extract quick-reply options from <options>opt1|opt2|opt3</options> tag.
+ */
+function extractOptions(text: string): string[] {
+  const match = text.match(/<options>([\s\S]*?)<\/options>/);
+  if (!match) return [];
+
+  return match[1]
+    .split('|')
+    .map((o) => o.trim())
+    .filter((o) => o.length > 0 && o.length < 80);
 }
 
 export default function ScopeArchitectPage({ params }: { params: { id: string } }) {
@@ -46,9 +64,13 @@ export default function ScopeArchitectPage({ params }: { params: { id: string } 
   const [isStreaming, setIsStreaming] = useState(false);
   const [aiUnavailable, setAiUnavailable] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
+  const [quickOptions, setQuickOptions] = useState<string[]>([]);
+  const [isListening, setIsListening] = useState(false);
+  const [voiceSupported, setVoiceSupported] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const recognitionRef = useRef<any>(null);
 
   // Load project data
   useEffect(() => {
@@ -56,7 +78,6 @@ export default function ScopeArchitectPage({ params }: { params: { id: string } 
       .get(params.id)
       .then((p) => {
         setProject(p);
-        // Add initial assistant greeting
         setMessages([
           {
             id: 'welcome',
@@ -74,100 +95,204 @@ export default function ScopeArchitectPage({ params }: { params: { id: string } 
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const handleSendMessage = async () => {
-    const text = input.trim();
-    if (!text || isStreaming) return;
+  // Re-focus input after streaming completes
+  useEffect(() => {
+    if (!isStreaming && !aiUnavailable) {
+      // Small delay so the disabled prop clears first
+      const timer = setTimeout(() => {
+        inputRef.current?.focus();
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [isStreaming, aiUnavailable]);
 
-    const userMessage: Message = {
-      id: `user-${Date.now()}`,
-      type: 'user',
-      content: text,
-    };
+  // Initialize Web Speech API
+  useEffect(() => {
+    const SpeechRecognition =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
-    setMessages((prev) => [...prev, userMessage]);
-    setInput('');
-    setIsStreaming(true);
-    setChatError(null);
+    if (!SpeechRecognition) {
+      setVoiceSupported(false);
+      return;
+    }
 
-    // Add a placeholder assistant message that we'll stream into
-    const assistantId = `assistant-${Date.now()}`;
-    setMessages((prev) => [...prev, { id: assistantId, type: 'assistant', content: '' }]);
+    setVoiceSupported(true);
 
-    try {
-      const res = await fetch(`/api/chat/scope/${params.id}`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text }),
-      });
+    const recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
 
-      if (res.status === 503) {
-        setAiUnavailable(true);
-        // Remove the empty assistant placeholder
-        setMessages((prev) => prev.filter((m) => m.id !== assistantId));
-        setIsStreaming(false);
-        return;
-      }
+    recognition.onresult = (event: any) => {
+      let finalTranscript = '';
+      let interimTranscript = '';
 
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.statusText }));
-        throw new Error(err.error || err.message || `Error ${res.status}`);
-      }
-
-      // Parse SSE stream
-      const reader = res.body?.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      if (!reader) throw new Error('No response stream');
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-
-        // Process complete SSE events
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || ''; // Keep incomplete line in buffer
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const jsonStr = line.slice(6).trim();
-          if (!jsonStr) continue;
-
-          try {
-            const event = JSON.parse(jsonStr);
-
-            if (event.type === 'text_delta') {
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === assistantId ? { ...m, content: m.content + event.content } : m,
-                ),
-              );
-            } else if (event.type === 'complete' && event.fieldUpdates?.length > 0) {
-              // Refresh project to get updated scope document
-              projectsApi.get(params.id).then(setProject).catch(() => {});
-            } else if (event.type === 'error') {
-              setChatError(event.error);
-            }
-          } catch {
-            // Skip malformed JSON
-          }
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          finalTranscript += transcript;
+        } else {
+          interimTranscript += transcript;
         }
       }
-    } catch (err: any) {
-      setChatError(err.message || 'Failed to send message');
-      // Remove empty assistant placeholder on error
-      setMessages((prev) => {
-        const msg = prev.find((m) => m.id === assistantId);
-        if (msg && !msg.content) return prev.filter((m) => m.id !== assistantId);
-        return prev;
-      });
-    } finally {
-      setIsStreaming(false);
-      inputRef.current?.focus();
+
+      // Show interim results in the input as the user speaks
+      if (interimTranscript) {
+        setInput((prev) => {
+          // Replace any previous interim text (after last final segment)
+          return finalTranscript || interimTranscript;
+        });
+      }
+
+      if (finalTranscript) {
+        setInput(finalTranscript);
+      }
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+    };
+
+    recognition.onerror = (event: any) => {
+      console.error('Speech recognition error:', event.error);
+      setIsListening(false);
+      if (event.error === 'not-allowed') {
+        setChatError('Microphone access denied. Please allow microphone permissions.');
+      }
+    };
+
+    recognitionRef.current = recognition;
+
+    return () => {
+      recognition.abort();
+    };
+  }, []);
+
+  const toggleVoice = useCallback(() => {
+    if (!recognitionRef.current) return;
+
+    if (isListening) {
+      recognitionRef.current.stop();
+      setIsListening(false);
+    } else {
+      setInput('');
+      recognitionRef.current.start();
+      setIsListening(true);
     }
+  }, [isListening]);
+
+  const sendMessage = useCallback(
+    async (text: string) => {
+      if (!text.trim() || isStreaming) return;
+
+      // Stop voice recognition if active
+      if (isListening && recognitionRef.current) {
+        recognitionRef.current.stop();
+        setIsListening(false);
+      }
+
+      const userMessage: Message = {
+        id: `user-${Date.now()}`,
+        type: 'user',
+        content: text.trim(),
+      };
+
+      setMessages((prev) => [...prev, userMessage]);
+      setInput('');
+      setIsStreaming(true);
+      setChatError(null);
+      setQuickOptions([]);
+
+      const assistantId = `assistant-${Date.now()}`;
+      setMessages((prev) => [...prev, { id: assistantId, type: 'assistant', content: '' }]);
+
+      try {
+        const res = await fetch(`/api/chat/scope/${params.id}`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: text.trim() }),
+        });
+
+        if (res.status === 503) {
+          setAiUnavailable(true);
+          setMessages((prev) => prev.filter((m) => m.id !== assistantId));
+          setIsStreaming(false);
+          return;
+        }
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: res.statusText }));
+          throw new Error(err.error || err.message || `Error ${res.status}`);
+        }
+
+        const reader = res.body?.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let fullContent = '';
+
+        if (!reader) throw new Error('No response stream');
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const jsonStr = line.slice(6).trim();
+            if (!jsonStr) continue;
+
+            try {
+              const event = JSON.parse(jsonStr);
+
+              if (event.type === 'text_delta') {
+                fullContent += event.content;
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === assistantId ? { ...m, content: m.content + event.content } : m,
+                  ),
+                );
+              } else if (event.type === 'complete') {
+                if (event.fieldUpdates?.length > 0) {
+                  projectsApi.get(params.id).then(setProject).catch(() => {});
+                }
+                // Extract quick options from the full response
+                const opts = extractOptions(fullContent);
+                if (opts.length > 0) {
+                  setQuickOptions(opts);
+                }
+              } else if (event.type === 'error') {
+                setChatError(event.error);
+              }
+            } catch {
+              // Skip malformed JSON
+            }
+          }
+        }
+      } catch (err: any) {
+        setChatError(err.message || 'Failed to send message');
+        setMessages((prev) => {
+          const msg = prev.find((m) => m.id === assistantId);
+          if (msg && !msg.content) return prev.filter((m) => m.id !== assistantId);
+          return prev;
+        });
+      } finally {
+        setIsStreaming(false);
+      }
+    },
+    [isStreaming, params.id],
+  );
+
+  const handleSendMessage = () => sendMessage(input);
+
+  const handleOptionClick = (option: string) => {
+    setQuickOptions([]);
+    sendMessage(option);
   };
 
   if (loadingProject) {
@@ -192,7 +317,6 @@ export default function ScopeArchitectPage({ params }: { params: { id: string } 
   const scope = project.scopeDocument;
   const completeness = scope?.completenessPercent ?? 0;
 
-  // Collect populated scope fields for display
   const scopeSections: { label: string; value: string | null }[] = [
     { label: 'Project Scope', value: scope?.projectScope ?? null },
     { label: 'Dimensions & Specifications', value: scope?.dimensions ?? null },
@@ -253,7 +377,6 @@ export default function ScopeArchitectPage({ params }: { params: { id: string } 
             <p className="text-white/60 text-sm">{project.title} &mdash; {project.type}</p>
           </div>
 
-          {/* Populated Sections */}
           {populatedSections.map((section) => (
             <section key={section.label}>
               <h2 className="text-lg font-semibold text-gold mb-3">{section.label}</h2>
@@ -265,7 +388,6 @@ export default function ScopeArchitectPage({ params }: { params: { id: string } 
             </section>
           ))}
 
-          {/* Empty Sections */}
           {emptySections.length > 0 && (
             <div className="space-y-3">
               <h3 className="text-sm font-medium text-white/40 uppercase tracking-wide">
@@ -328,7 +450,7 @@ export default function ScopeArchitectPage({ params }: { params: { id: string } 
 
         {/* Chat Messages */}
         <div className="flex-1 overflow-auto p-6 space-y-4">
-          {messages.map((message) => (
+          {messages.map((message, idx) => (
             <div
               key={message.id}
               className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}
@@ -344,17 +466,44 @@ export default function ScopeArchitectPage({ params }: { params: { id: string } 
                   {message.type === 'assistant'
                     ? cleanAssistantMessage(message.content)
                     : message.content}
-                  {isStreaming && message.type === 'assistant' && message === messages[messages.length - 1] && !message.content && (
-                    <span className="inline-flex gap-1 ml-1">
-                      <span className="w-1.5 h-1.5 bg-white/40 rounded-full animate-pulse" />
-                      <span className="w-1.5 h-1.5 bg-white/40 rounded-full animate-pulse" style={{ animationDelay: '0.2s' }} />
-                      <span className="w-1.5 h-1.5 bg-white/40 rounded-full animate-pulse" style={{ animationDelay: '0.4s' }} />
-                    </span>
-                  )}
+                  {isStreaming &&
+                    message.type === 'assistant' &&
+                    idx === messages.length - 1 &&
+                    !message.content && (
+                      <span className="inline-flex gap-1 ml-1">
+                        <span className="w-1.5 h-1.5 bg-white/40 rounded-full animate-pulse" />
+                        <span
+                          className="w-1.5 h-1.5 bg-white/40 rounded-full animate-pulse"
+                          style={{ animationDelay: '0.2s' }}
+                        />
+                        <span
+                          className="w-1.5 h-1.5 bg-white/40 rounded-full animate-pulse"
+                          style={{ animationDelay: '0.4s' }}
+                        />
+                      </span>
+                    )}
                 </p>
               </div>
             </div>
           ))}
+
+          {/* Quick Reply Options */}
+          {quickOptions.length > 0 && !isStreaming && (
+            <div className="flex flex-wrap gap-2 pt-2">
+              {quickOptions.map((option, i) => (
+                <button
+                  key={i}
+                  onClick={() => handleOptionClick(option)}
+                  className="px-4 py-2 text-sm rounded-full border border-gold/40 text-gold
+                    bg-gold/10 hover:bg-gold/20 hover:border-gold/60
+                    transition-all duration-200 active:scale-95"
+                >
+                  {option}
+                </button>
+              ))}
+            </div>
+          )}
+
           <div ref={messagesEndRef} />
         </div>
 
@@ -375,7 +524,22 @@ export default function ScopeArchitectPage({ params }: { params: { id: string } 
               placeholder={aiUnavailable ? 'AI is not available...' : 'Describe your project scope...'}
               disabled={aiUnavailable || isStreaming}
               className="flex-1 bg-transparent text-white placeholder-white/40 outline-none disabled:opacity-50"
+              autoFocus
             />
+            {voiceSupported && (
+              <button
+                onClick={toggleVoice}
+                disabled={isStreaming || aiUnavailable}
+                className={`transition-colors ${
+                  isListening
+                    ? 'text-red-400 hover:text-red-300 animate-pulse'
+                    : 'text-white/40 hover:text-white/70'
+                } disabled:text-white/20`}
+                title={isListening ? 'Stop recording' : 'Voice input'}
+              >
+                {isListening ? <MicOff size={18} /> : <Mic size={18} />}
+              </button>
+            )}
             <button
               onClick={handleSendMessage}
               disabled={!input.trim() || isStreaming || aiUnavailable}
@@ -391,7 +555,11 @@ export default function ScopeArchitectPage({ params }: { params: { id: string } 
           <p className="text-xs text-white/40">
             {isStreaming
               ? 'AI is thinking...'
-              : 'Describe your project details and the AI will build your scope of work.'}
+              : isListening
+                ? '🎙️ Listening... speak now, then press send'
+                : quickOptions.length > 0
+                  ? `Tap an option above${voiceSupported ? ', use voice 🎙️,' : ''} or type your own answer`
+                  : `Describe your project details${voiceSupported ? ' — type or use voice 🎙️' : ''}.`}
           </p>
         </div>
       </div>
