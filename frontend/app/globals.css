@@ -1,0 +1,149 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Chat styles */
+.chat-message {
+  @apply p-4 rounded-lg mb-4;
+}
+
+.chat-message.user {
+  @apply bg-cricket-green text-white;
+}
+
+.chat-message.assistant {
+  @apply bg-gray-200 text-gray-900;
+}
+
+.chat-input {
+  @apply w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cricket-green;
+}
+
+/* Ticket card styles */
+.ticket-card {
+  @apply bg-white p-6 rounded-lg shadow-md hover:shadow-lg transition border-l-4;
+}
+
+.ticket-card.open {
+  @apply border-cricket-green;
+}
+
+.ticket-card.in-progress {
+  @apply border-cricket-gold;
+}
+
+.ticket-card.resolved {
+  @apply border-green-500;
+}
+
+.ticket-card.closed {
+  @apply border-gray-400;
+}
+
+/* Status badge */
+.badge {
+  @apply px-3 py-1 rounded-full text-sm font-semibold inline-block;
+}
+
+.badge.low {
+  @apply bg-blue-100 text-blue-800;
+}
+
+.badge.medium {
+  @apply bg-yellow-100 text-yellow-800;
+}
+
+.badge.high {
+  @apply bg-orange-100 text-orange-800;
+}
+
+.badge.urgent {
+  @apply bg-cricket-red text-white;
+}
+
+/* SLA badge */
+.sla-badge {
+  @apply px-3 py-1 rounded-full text-sm font-semibold inline-block;
+}
+
+.sla-badge.on-track {
+  @apply bg-green-100 text-green-800;
+}
+
+.sla-badge.at-risk {
+  @apply bg-yellow-100 text-yellow-800;
+}
+
+.sla-badge.breached {
+  @apply bg-cricket-red text-white;
+}
+
+/* Loading spinner */
+.spinner {
+  display: inline-block;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Form styles */
+.form-group {
+  @apply mb-6;
+}
+
+.form-label {
+  @apply block text-gray-700 font-semibold mb-2;
+}
+
+.form-select,
+.form-input,
+.form-textarea {
+  @apply w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cricket-green;
+}
+
+.form-textarea {
+  @apply resize-none;
+}
+
+/* Button styles */
+.btn {
+  @apply px-6 py-2 rounded-lg font-semibold transition duration-200;
+}
+
+.btn-primary {
+  @apply bg-cricket-green text-white hover:bg-cricket-green-dark;
+}
+
+.btn-secondary {
+  @apply bg-gray-200 text-gray-800 hover:bg-gray-300;
+}
+
+.btn-success {
+  @apply bg-green-500 text-white hover:bg-green-600;
+}
+
+.btn-danger {
+  @apply bg-cricket-red text-white hover:bg-red-700;
+}
+
+.btn-small {
+  @apply px-3 py-1 text-sm;
+}
