@@ -15,8 +15,14 @@ export default function TicketChat({ ticketId }: TicketChatProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    // Load initial messages
-    loadMessages();
+    (async () => {
+      const existing = await loadMessages();
+      if (!existing || existing.length === 0) {
+        // First visit: trigger the AI to acknowledge the form content
+        await streamAssistantReply('');
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ticketId]);
 
   useEffect(() => {
@@ -24,47 +30,44 @@ export default function TicketChat({ ticketId }: TicketChatProps) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const loadMessages = async () => {
+  const loadMessages = async (): Promise<TicketMessage[]> => {
     try {
       const response = await ticketsAPI.get(ticketId);
-      setMessages(response.data.messages || []);
+      // Hide internal seed messages from the visible transcript
+      const visible = (response.data.messages || []).filter(m => !m.isInternal);
+      setMessages(visible);
+      return response.data.messages || [];
     } catch (err) {
       console.error('Failed to load messages', err);
+      return [];
     }
   };
 
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim()) return;
-
+  const streamAssistantReply = async (userText: string) => {
     setIsLoading(true);
     setError(null);
 
     try {
-      // Add user message immediately
-      const userMessage: TicketMessage = {
-        id: Date.now().toString(),
-        ticketId,
-        role: 'user',
-        content: input,
-        isInternal: false,
-        createdAt: new Date().toISOString(),
-      };
-      setMessages(prev => [...prev, userMessage]);
-      setInput('');
-
-      // Stream AI response
-      const response = await ticketsAPI.streamChat(ticketId, input);
-
-      if (!response.ok) {
-        throw new Error('Failed to get AI response');
+      if (userText) {
+        const userMessage: TicketMessage = {
+          id: `u-${Date.now()}`,
+          ticketId,
+          role: 'user',
+          content: userText,
+          isInternal: false,
+          createdAt: new Date().toISOString(),
+        };
+        setMessages(prev => [...prev, userMessage]);
       }
+
+      const response = await ticketsAPI.streamChat(ticketId, userText);
+      if (!response.ok) throw new Error('Failed to get AI response');
 
       const reader = response.body?.getReader();
       if (!reader) throw new Error('No response body');
 
       let assistantMessage = '';
-      const assistantId = Date.now().toString();
+      const assistantId = `a-${Date.now()}`;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -74,29 +77,30 @@ export default function TicketChat({ ticketId }: TicketChatProps) {
         const lines = chunk.split('\n');
 
         for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              if (data.type === 'text_delta') {
-                assistantMessage += data.text || '';
-                setMessages(prev => {
-                  const lastMsg = prev[prev.length - 1];
-                  if (lastMsg?.id === assistantId && lastMsg?.role === 'assistant') {
-                    return [...prev.slice(0, -1), { ...lastMsg, content: assistantMessage }];
-                  }
-                  return [...prev, {
-                    id: assistantId,
-                    ticketId,
-                    role: 'assistant',
-                    content: assistantMessage,
-                    isInternal: false,
-                    createdAt: new Date().toISOString(),
-                  }];
-                });
-              }
-            } catch (e) {
-              // Ignore parse errors
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (data.type === 'text' && data.text) {
+              assistantMessage += data.text;
+              setMessages(prev => {
+                const last = prev[prev.length - 1];
+                if (last?.id === assistantId) {
+                  return [...prev.slice(0, -1), { ...last, content: assistantMessage }];
+                }
+                return [...prev, {
+                  id: assistantId,
+                  ticketId,
+                  role: 'assistant',
+                  content: assistantMessage,
+                  isInternal: false,
+                  createdAt: new Date().toISOString(),
+                }];
+              });
+            } else if (data.type === 'error') {
+              setError(data.error || 'AI error');
             }
+          } catch {
+            /* ignore parse errors */
           }
         }
       }
@@ -105,6 +109,14 @@ export default function TicketChat({ ticketId }: TicketChatProps) {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleSendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const text = input.trim();
+    if (!text) return;
+    setInput('');
+    await streamAssistantReply(text);
   };
 
   return (

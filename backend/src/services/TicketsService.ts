@@ -1,4 +1,4 @@
-import { PrismaClient, Ticket, TicketStatus, TicketPriority } from '@prisma/client';
+import { PrismaClient, Ticket } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
@@ -13,9 +13,9 @@ export interface CreateTicketInput {
 
 export interface TicketFilters {
   userId?: string;
-  status?: TicketStatus;
+  status?: string;
   category?: string;
-  priority?: TicketPriority;
+  priority?: string;
   assignedToId?: string;
   limit?: number;
   offset?: number;
@@ -26,36 +26,32 @@ export class TicketsService {
     const ticket = await prisma.ticket.create({
       data: {
         userId: input.userId,
-        category: input.category as any,
+        category: input.category,
         subject: input.subject,
         description: input.description,
-        priority: input.priority as TicketPriority,
-        status: 'open' as TicketStatus,
+        priority: input.priority,
+        status: 'open',
         matchId: input.matchId,
       },
     });
 
-    // Calculate and create SLA
     await this.calculateAndCreateSLA(ticket.id, input.category, input.priority);
 
     return ticket;
   }
 
-  async getTicket(id: string): Promise<(Ticket & { messages: any[] }) | null> {
+  async getTicket(id: string) {
     return prisma.ticket.findUnique({
       where: { id },
       include: {
-        messages: {
-          orderBy: { createdAt: 'asc' },
-        },
+        messages: { orderBy: { createdAt: 'asc' } },
         sla: true,
       },
-    }) as any;
+    });
   }
 
-  async listTickets(filters: TicketFilters): Promise<Ticket[]> {
+  async listTickets(filters: TicketFilters) {
     const where: any = {};
-
     if (filters.userId) where.userId = filters.userId;
     if (filters.status) where.status = filters.status;
     if (filters.category) where.category = filters.category;
@@ -64,13 +60,14 @@ export class TicketsService {
 
     return prisma.ticket.findMany({
       where,
+      include: { sla: true },
       orderBy: { createdAt: 'desc' },
-      take: filters.limit || 20,
+      take: filters.limit || 50,
       skip: filters.offset || 0,
     });
   }
 
-  async updateTicketStatus(id: string, status: TicketStatus): Promise<Ticket> {
+  async updateTicketStatus(id: string, status: string) {
     const resolvedAt = status === 'resolved' || status === 'closed' ? new Date() : null;
 
     const ticket = await prisma.ticket.update({
@@ -78,32 +75,26 @@ export class TicketsService {
       data: { status, resolvedAt },
     });
 
-    // Update SLA if resolved
     if (resolvedAt) {
       await prisma.ticketSLA.update({
         where: { ticketId: id },
         data: { resolvedAt },
-      });
+      }).catch(() => null);
     }
 
     return ticket;
   }
 
-  async assignTicket(id: string, assignedToId: string): Promise<Ticket> {
+  async assignTicket(id: string, assignedToId: string) {
     return prisma.ticket.update({
       where: { id },
-      data: { assignedToId, status: 'in_progress' as TicketStatus },
+      data: { assignedToId, status: 'in_progress' },
     });
   }
 
   async addMessage(ticketId: string, role: string, content: string, isInternal: boolean = false) {
     return prisma.ticketMessage.create({
-      data: {
-        ticketId,
-        role,
-        content,
-        isInternal,
-      },
+      data: { ticketId, role, content, isInternal },
     });
   }
 
@@ -115,7 +106,6 @@ export class TicketsService {
   }
 
   private async calculateAndCreateSLA(ticketId: string, category: string, priority: string) {
-    // SLA rules based on support-rules.md
     const slaTimes: Record<string, Record<string, { firstResponse: number; resolution: number }>> = {
       player_registration: {
         low: { firstResponse: 24, resolution: 48 },
@@ -147,7 +137,7 @@ export class TicketsService {
         urgent: { firstResponse: 2, resolution: 72 },
       },
       feature_request: {
-        low: { firstResponse: 48, resolution: 0 }, // No strict resolution SLA
+        low: { firstResponse: 48, resolution: 0 },
       },
     };
 

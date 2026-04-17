@@ -1,155 +1,139 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { readFileSync, existsSync } from 'fs';
+import { resolve } from 'path';
 
-const client = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
+function getClient(): Anthropic | null {
+  const key = process.env.ANTHROPIC_API_KEY;
+  return key ? new Anthropic({ apiKey: key }) : null;
+}
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
 }
 
-export const CRICKET_SUPPORT_SYSTEM_PROMPT = `You are a cricket support assistant for the Dallas Cricket League (DCL).
-You help users create support tickets by interviewing them conversationally.
+// Load support-rules.md at startup. We search a few plausible locations so this
+// works from both `src/` (dev) and `dist/` (build) runs.
+function loadFirst(candidates: string[], label: string): string {
+  for (const p of candidates) {
+    try {
+      if (existsSync(p)) {
+        console.log(`[ChatService] Loaded ${label} from`, p);
+        return readFileSync(p, 'utf8');
+      }
+    } catch {
+      // try the next candidate
+    }
+  }
+  console.warn(`[ChatService] ${label} not found — AI will rely on general cricket knowledge.`);
+  return '';
+}
 
-CONTEXT:
-- Cricket rules are defined in the DCL rulebook (Laws 1-42)
-- Users are team captains, players, umpires, or tournament staff
-- Common issues: player eligibility, umpire calls, scoring errors, equipment, scheduling, discipline
-- Tone: Professional, empathetic, encouraging fair play and Spirit of Cricket
+const RULES = loadFirst(
+  [
+    resolve(process.cwd(), '..', 'support-rules.md'),
+    resolve(process.cwd(), 'support-rules.md'),
+  ],
+  'support-rules.md',
+);
 
-YOUR ROLE:
-1. Listen to the user's issue
-2. Ask clarifying questions to understand context (Law #, match date, evidence)
-3. Cite specific cricket rules (Law 1.2.2, Law 2.12, etc.)
-4. Suggest quick fixes where possible
-5. Offer escalation path if needed
-6. Collect all details for a structured ticket
+const RULEBOOK = loadFirst(
+  [
+    resolve(process.cwd(), 'data', 'dcl-rulebook.txt'),
+    resolve(process.cwd(), 'backend', 'data', 'dcl-rulebook.txt'),
+  ],
+  'dcl-rulebook.txt',
+);
 
-4-TURN INTERVIEW (flexible order):
-1. Category: What type of issue? (Player, Umpire, Scoring, Equipment, Scheduling, Discipline, Feature)
-2. Details: What happened? When? Any evidence (video, photo)?
-3. Context: Which match? Which players/umpires? What's the impact?
-4. Resolution: What's your preferred outcome? How urgent? (Playoff = URGENT)
+const BASE_PROMPT = `You are the AI support assistant for the Dallas Cricket League (DCL).
+You help captains, players, umpires, and tournament staff triage support tickets.
 
-WHEN TO SUGGEST QUICK FIXES:
-- Playoff player eligibility: Direct to Law 1.5 rules
-- Umpire call dispute: Ask for video, cite Law 2.12 (final but can be altered)
-- Scoring error: Request scoresheet + video proof
-- Missing equipment: Suggest having backups before next match
-- Walk-over dispute: Confirm timing (must be within 45 mins of start)
+Your job: listen, ask targeted follow-ups, cite specific rules, suggest quick fixes, and collect
+everything needed for a clean ticket. Keep replies short (2-4 sentences) and conversational.
 
-ALWAYS:
-- Reference specific Cricket Laws (e.g., "Per Law 1.2.2...")
-- Validate frustrations ("That's tough, especially in a playoff...")
-- Respect umpire authority (unless clear rule violation)
-- Encourage gathering evidence (video, photos, witness statements)
-- Note when issue is Playoff-related (→ URGENT priority)
-- Suggest emailing dclmgmtops@gmail.com for time-sensitive issues
+INTERVIEW FLOW (flexible order — skip turns if the user has already answered):
+1. Category — which of the 7 categories does this fall under?
+2. Details — what happened, when, with what evidence (video/photo/witnesses)?
+3. Context — which match, which teams/players/umpires, is this a playoff?
+4. Resolution — what outcome does the user want, and how urgent?
 
-Keep responses concise (2-3 sentences) and conversational.`;
+Always bump priority to URGENT when a playoff is affected.
+
+When you cite a rule or solution, use the exact wording and Law numbers from the rules
+reference below. If the rules reference doesn't cover something, say so honestly rather
+than inventing a Law number.`;
+
+const TRIAGE_SECTION = RULES
+  ? `\n\n---\nDCL SUPPORT PLAYBOOK (primary reference — quick fixes, escalation paths, SLAs):\n\n${RULES}\n---\n`
+  : '';
+
+const RULEBOOK_SECTION = RULEBOOK
+  ? `\n\n---\nDCL OFFICIAL RULEBOOK (use for exact Law citations and numeric rule thresholds):\n\n${RULEBOOK}\n---\n`
+  : '';
+
+export const CRICKET_SUPPORT_SYSTEM_PROMPT = BASE_PROMPT + TRIAGE_SECTION + RULEBOOK_SECTION;
+
+// Stock fallback responses keyed to the 4-turn interview flow (used only when
+// ANTHROPIC_API_KEY is not set).
+const FALLBACK_REPLIES = [
+  "Hi! I'm your DCL support assistant. To get started — what type of issue are you facing? (Player registration, umpire call, scoring, equipment, scheduling, discipline, or a feature request?)",
+  "Got it — can you walk me through what happened? When did the incident occur, and do you have any evidence like video, photos, or witness details?",
+  "Thanks. Which match was this, and who was involved (players, umpires, teams)? Was this a regular-season or playoff fixture? Playoffs will bump this to URGENT priority.",
+  "Last thing — what outcome are you hoping for, and how time-sensitive is this? Once you share that, I'll summarize and you can submit the ticket.",
+  "Perfect, I have what I need. Per the DCL rulebook, your issue falls under the appropriate Law. Please click 'Create Ticket' on the left and I'll make sure it's routed to the right team.",
+];
 
 export class ChatService {
-  async streamChatResponse(messages: ChatMessage[]) {
-    try {
-      const stream = client.messages.stream({
-        model: 'claude-3-5-sonnet-20241022',
-        max_tokens: 1024,
-        system: CRICKET_SUPPORT_SYSTEM_PROMPT,
-        messages: messages.map(m => ({
-          role: m.role,
-          content: m.content,
-        })),
-      });
+  hasApiKey() {
+    return !!getClient();
+  }
 
-      return stream;
-    } catch (error) {
-      console.error('Chat streaming error:', error);
-      throw error;
+  hasRules() {
+    return RULES.length > 0;
+  }
+
+  async *streamChatResponse(messages: ChatMessage[]): AsyncGenerator<string> {
+    const client = getClient();
+    if (!client) {
+      const turn = Math.min(Math.floor(messages.length / 2), FALLBACK_REPLIES.length - 1);
+      const reply = FALLBACK_REPLIES[turn];
+      for (const word of reply.split(' ')) {
+        yield word + ' ';
+        await new Promise(r => setTimeout(r, 30));
+      }
+      return;
+    }
+
+    const stream = await client.messages.stream({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1024,
+      system: CRICKET_SUPPORT_SYSTEM_PROMPT,
+      messages: messages.map(m => ({ role: m.role, content: m.content })),
+    });
+
+    for await (const event of stream) {
+      if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+        yield event.delta.text;
+      }
     }
   }
 
   async generateResponse(messages: ChatMessage[]): Promise<string> {
-    try {
-      const response = await client.messages.create({
-        model: 'claude-3-5-sonnet-20241022',
-        max_tokens: 1024,
-        system: CRICKET_SUPPORT_SYSTEM_PROMPT,
-        messages: messages.map(m => ({
-          role: m.role,
-          content: m.content,
-        })),
-      });
-
-      const textContent = response.content.find(block => block.type === 'text');
-      if (textContent && textContent.type === 'text') {
-        return textContent.text;
-      }
-
-      throw new Error('No text content in response');
-    } catch (error) {
-      console.error('Chat error:', error);
-      throw error;
-    }
-  }
-
-  extractTicketData(conversation: ChatMessage[]): Record<string, any> {
-    // Parse conversation to extract ticket details
-    // This would analyze the conversation and extract:
-    // - category (player_registration, umpire_issues, etc.)
-    // - priority (based on urgency and playoff mention)
-    // - key details mentioned
-    // This is simplified - in production would use more sophisticated parsing
-
-    const transcript = conversation.map(m => m.content).join(' ').toLowerCase();
-
-    return {
-      category: this.detectCategory(transcript),
-      priority: this.detectPriority(transcript),
-      keyPoints: this.extractKeyPoints(transcript),
-    };
-  }
-
-  private detectCategory(text: string): string {
-    const categoryKeywords = {
-      player_registration: ['player', 'registration', 'eligible', 'roster', 'ineligible'],
-      umpire_issues: ['umpire', 'call', 'decision', 'officiating', 'bias'],
-      scoring_disputes: ['score', 'scorecard', 'runs', 'boundary', 'wicket'],
-      equipment_issues: ['ball', 'bat', 'equipment', 'ground', 'stumps'],
-      match_scheduling: ['schedule', 'reschedule', 'time', 'walk-over', 'late'],
-      disciplinary: ['suspension', 'conduct', 'unfair', 'discipline', 'abuse'],
-      feature_request: ['feature', 'request', 'app', 'website', 'improve'],
-    };
-
-    for (const [category, keywords] of Object.entries(categoryKeywords)) {
-      if (keywords.some(kw => text.includes(kw))) {
-        return category;
-      }
+    const client = getClient();
+    if (!client) {
+      const turn = Math.min(Math.floor(messages.length / 2), FALLBACK_REPLIES.length - 1);
+      return FALLBACK_REPLIES[turn];
     }
 
-    return 'feature_request'; // default
-  }
+    const response = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1024,
+      system: CRICKET_SUPPORT_SYSTEM_PROMPT,
+      messages: messages.map(m => ({ role: m.role, content: m.content })),
+    });
 
-  private detectPriority(text: string): string {
-    if (text.includes('playoff') || text.includes('urgent') || text.includes('asap')) {
-      return 'urgent';
-    }
-    if (text.includes('important') || text.includes('soon')) {
-      return 'high';
-    }
-    if (text.includes('eventually') || text.includes('nice-to-have')) {
-      return 'low';
-    }
-    return 'medium';
-  }
-
-  private extractKeyPoints(text: string): string[] {
-    // Very simplified extraction
-    const sentences = text.split('.');
-    return sentences
-      .filter(s => s.length > 20)
-      .slice(0, 3)
-      .map(s => s.trim());
+    const textBlock = response.content.find((b: any) => b.type === 'text') as any;
+    return textBlock?.text ?? '';
   }
 }
 
