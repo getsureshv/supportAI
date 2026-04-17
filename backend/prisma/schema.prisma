@@ -1,0 +1,128 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id       String  @id @default(uuid()) @db.Uuid
+  email    String  @unique
+  name     String
+  role     String  @default("user") // user, admin, support
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  ticketsCreated Ticket[] @relation("CreatedBy")
+  ticketsAssigned Ticket[] @relation("AssignedTo")
+
+  @@map("users")
+}
+
+enum TicketCategory {
+  player_registration
+  umpire_issues
+  scoring_disputes
+  equipment_issues
+  match_scheduling
+  disciplinary
+  feature_request
+
+  @@map("ticket_category")
+}
+
+enum TicketPriority {
+  low
+  medium
+  high
+  urgent
+
+  @@map("ticket_priority")
+}
+
+enum TicketStatus {
+  open
+  in_progress
+  resolved
+  closed
+
+  @@map("ticket_status")
+}
+
+model Ticket {
+  id       String  @id @default(uuid()) @db.Uuid
+  userId   String  @map("user_id") @db.Uuid
+  assignedToId String? @map("assigned_to_id") @db.Uuid
+
+  subject String
+  description String
+  category TicketCategory
+  priority TicketPriority
+  status TicketStatus @default(open)
+
+  matchId String? @map("match_id") // Reference to specific match if applicable
+  interviewTurn Int @default(1) @map("interview_turn") // Tracks progress through 4-turn interview
+  attachment String? // S3 URL if file uploaded
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  resolvedAt DateTime? @map("resolved_at")
+
+  user User @relation("CreatedBy", fields: [userId], references: [id], onDelete: Cascade)
+  assignedTo User? @relation("AssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+  messages TicketMessage[]
+  sla TicketSLA?
+
+  @@index([userId])
+  @@index([assignedToId])
+  @@index([status])
+  @@index([category])
+  @@map("tickets")
+}
+
+model TicketMessage {
+  id String @id @default(uuid()) @db.Uuid
+  ticketId String @map("ticket_id") @db.Uuid
+
+  role String // user, assistant, support
+  content String
+  isInternal Boolean @default(false) @map("is_internal")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId])
+  @@map("ticket_messages")
+}
+
+model TicketSLA {
+  id String @id @default(uuid()) @db.Uuid
+  ticketId String @unique @map("ticket_id") @db.Uuid
+
+  category String?
+  priority String?
+  firstResponseDueAt DateTime? @map("first_response_due_at")
+  resolutionDueAt DateTime? @map("resolution_due_at")
+  firstResponseAt DateTime? @map("first_response_at")
+  resolvedAt DateTime? @map("resolved_at")
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@map("ticket_slas")
+}
+
+model TicketAttachment {
+  id String @id @default(uuid()) @db.Uuid
+  ticketId String @map("ticket_id") @db.Uuid
+
+  fileName String @map("file_name")
+  s3Url String @map("s3_url")
+
+  uploadedAt DateTime @default(now()) @map("uploaded_at")
+
+  @@index([ticketId])
+  @@map("ticket_attachments")
+}
