@@ -6,6 +6,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { ticketsAPI, Ticket } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import UserHeader from '@/components/UserHeader';
+import TicketAttachments from '@/components/TicketAttachments';
 
 export default function TicketDetailPage() {
   const router = useRouter();
@@ -97,6 +98,10 @@ export default function TicketDetailPage() {
             </div>
           )}
         </div>
+
+        {ticket.attachments && ticket.attachments.length > 0 && (
+          <TicketAttachments ticketId={ticket.id} attachments={ticket.attachments} />
+        )}
 
         <div className="bg-white rounded-lg shadow-sm p-6 border border-gray-100">
           <h3 className="font-bold text-lg mb-4">Conversation ({messages.length})</h3>

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
-import { chatSessionsAPI } from '@/lib/api';
+import { chatSessionsAPI, Attachment } from '@/lib/api';
 import UserHeader from '@/components/UserHeader';
 import ChatChips from '@/components/ChatChips';
 
@@ -24,7 +24,14 @@ interface UserTurn {
   createdAt: string;
 }
 
-type Turn = AssistantTurn | UserTurn;
+interface AttachmentTurn {
+  id: string;
+  role: 'attachment';
+  attachment: Attachment;
+  createdAt: string;
+}
+
+type Turn = AssistantTurn | UserTurn | AttachmentTurn;
 
 export default function ChatHomePage() {
   const router = useRouter();
@@ -32,7 +39,9 @@ export default function ChatHomePage() {
 
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [turns, setTurns] = useState<Turn[]>([]);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [escalating, setEscalating] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -44,7 +53,7 @@ export default function ChatHomePage() {
     else if (!user.profileComplete) router.replace('/onboarding');
   }, [loading, user, router]);
 
-  // Bootstrap session on first load
+  // Bootstrap session
   useEffect(() => {
     if (!user?.profileComplete || sessionId) return;
     (async () => {
@@ -68,7 +77,23 @@ export default function ChatHomePage() {
     })();
   }, [user, sessionId]);
 
-  // Auto-scroll to bottom on new turns
+  // Poll for transcription updates while anything is pending
+  useEffect(() => {
+    if (!sessionId) return;
+    const hasPending = attachments.some(a => a.transcriptionStatus === 'pending');
+    if (!hasPending) return;
+    const interval = setInterval(async () => {
+      try {
+        const res = await chatSessionsAPI.listAttachments(sessionId);
+        setAttachments(res.data);
+      } catch {
+        /* best-effort */
+      }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [sessionId, attachments]);
+
+  // Auto-scroll on new content
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
   }, [turns]);
@@ -79,7 +104,6 @@ export default function ChatHomePage() {
   const handleReply = async (text: string) => {
     if (!sessionId || busy) return;
 
-    // If the user picked "Raise a ticket", escalate instead of sending a message
     if (/raise.*ticket/i.test(text)) {
       await handleEscalate();
       return;
@@ -111,6 +135,44 @@ export default function ChatHomePage() {
       setBusy(false);
     }
   };
+
+  const handleFiles = async (files: File[]) => {
+    if (!sessionId || uploading) return;
+    setUploading(true);
+    setError(null);
+
+    try {
+      const res = await chatSessionsAPI.uploadAttachments(sessionId, files);
+      // Append new attachment turns to the chat stream
+      const newTurns: AttachmentTurn[] = res.data.map(a => ({
+        id: `att-${a.id}`,
+        role: 'attachment',
+        attachment: a,
+        createdAt: a.createdAt,
+      }));
+      setTurns(prev => [...prev, ...newTurns]);
+      setAttachments(prev => [...prev, ...res.data]);
+
+      // Tell the AI about the upload so it can acknowledge and continue the flow
+      const names = files.map(f => f.name).join(', ');
+      await handleReply(`I just uploaded: ${names}. Please take this evidence into account.`);
+    } catch (err: any) {
+      setError(err.response?.data?.error || err.message || 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  // Keep attachment turn records up-to-date when polling updates statuses
+  useEffect(() => {
+    setTurns(prev =>
+      prev.map(t => {
+        if (t.role !== 'attachment') return t;
+        const latest = attachments.find(a => a.id === t.attachment.id);
+        return latest ? { ...t, attachment: latest } : t;
+      }),
+    );
+  }, [attachments]);
 
   const handleEscalate = async () => {
     if (!sessionId || escalating) return;
@@ -146,10 +208,13 @@ export default function ChatHomePage() {
       <main className="flex-1 max-w-3xl w-full mx-auto px-6 py-6 flex flex-col">
         <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-4 pb-6">
           {turns.map(turn => (
-            <TurnBubble key={turn.id} turn={turn} />
+            <TurnBubble key={turn.id} turn={turn} sessionId={sessionId} />
           ))}
 
           {busy && <div className="text-sm text-gray-500 italic">AI is thinking…</div>}
+          {uploading && (
+            <div className="text-sm text-gray-500 italic">Uploading and transcribing…</div>
+          )}
 
           {error && (
             <div className="bg-red-50 border border-red-200 text-red-700 p-3 rounded-lg text-sm">
@@ -163,7 +228,9 @@ export default function ChatHomePage() {
             <ChatChips
               options={latestAssistant.options}
               disabled={busy || escalating}
+              uploading={uploading}
               onPick={handleReply}
+              onFiles={handleFiles}
             />
           </div>
         )}
@@ -172,7 +239,58 @@ export default function ChatHomePage() {
   );
 }
 
-function TurnBubble({ turn }: { turn: Turn }) {
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function statusLabel(status: string): string {
+  if (status === 'completed') return '✓ Transcribed';
+  if (status === 'pending') return '⏳ Transcribing…';
+  return '✗ Transcription failed';
+}
+
+function TurnBubble({ turn, sessionId }: { turn: Turn; sessionId: string | null }) {
+  if (turn.role === 'attachment') {
+    const a = turn.attachment;
+    const isImage = a.mimeType.startsWith('image/');
+    const downloadUrl = sessionId ? chatSessionsAPI.attachmentUrl(sessionId, a.id) : '#';
+    return (
+      <div className="flex justify-end">
+        <div className="max-w-[85%] bg-blue-50 border border-blue-200 rounded-2xl rounded-br-sm px-4 py-3">
+          <div className="text-xs font-semibold text-blue-700 mb-2">📎 Evidence uploaded</div>
+          <div className="flex items-center gap-3">
+            {isImage ? (
+              <img
+                src={downloadUrl}
+                alt={a.fileName}
+                className="w-14 h-14 rounded border border-blue-200 object-cover"
+              />
+            ) : (
+              <div className="w-14 h-14 bg-white rounded border border-blue-200 flex items-center justify-center text-2xl">
+                📄
+              </div>
+            )}
+            <div className="min-w-0">
+              <a
+                href={downloadUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm font-semibold text-blue-900 hover:underline truncate block"
+              >
+                {a.fileName}
+              </a>
+              <div className="text-xs text-blue-700 mt-0.5">
+                {formatSize(a.fileSize)} · {statusLabel(a.transcriptionStatus)}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const isUser = turn.role === 'user';
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
@@ -186,7 +304,9 @@ function TurnBubble({ turn }: { turn: Turn }) {
         {!isUser && (
           <div className="text-xs font-semibold text-cricket-green mb-1">🤖 Support AI</div>
         )}
-        <div className="whitespace-pre-wrap text-sm leading-relaxed">{turn.content}</div>
+        <div className="whitespace-pre-wrap text-sm leading-relaxed">
+          {(turn as UserTurn | AssistantTurn).content}
+        </div>
       </div>
     </div>
   );

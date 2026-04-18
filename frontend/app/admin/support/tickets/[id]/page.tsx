@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { ticketsAPI, adminAPI, Ticket } from '@/lib/api';
 import UserHeader from '@/components/UserHeader';
+import TicketAttachments from '@/components/TicketAttachments';
 import { useRequireAuth } from '@/lib/useRequireAuth';
 
 const STATUSES = ['open', 'in_progress', 'resolved', 'closed'];
@@ -142,6 +143,10 @@ export default function AdminTicketDetailPage() {
           ))}
         </div>
       </div>
+
+      {ticket.attachments && ticket.attachments.length > 0 && (
+        <TicketAttachments ticketId={ticket.id} attachments={ticket.attachments} />
+      )}
 
       {/* Transcript */}
       <div className="bg-white rounded-lg shadow-md p-6">

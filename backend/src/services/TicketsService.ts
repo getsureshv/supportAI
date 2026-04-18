@@ -46,6 +46,7 @@ export class TicketsService {
       include: {
         messages: { orderBy: { createdAt: 'asc' } },
         sla: true,
+        attachments: { orderBy: { createdAt: 'asc' } },
       },
     });
   }

@@ -23,6 +23,7 @@ export interface Ticket {
   resolvedAt?: string;
   messages?: TicketMessage[];
   sla?: TicketSLA;
+  attachments?: Attachment[];
 }
 
 export interface TicketMessage {
@@ -56,6 +57,18 @@ export interface SendMessageRequest {
   content: string;
   role: 'user' | 'assistant';
   isInternal?: boolean;
+}
+
+export interface Attachment {
+  id: string;
+  sessionId: string | null;
+  ticketId: string | null;
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+  transcription: string | null;
+  transcriptionStatus: 'pending' | 'completed' | 'failed';
+  createdAt: string;
 }
 
 export interface Team {
@@ -178,7 +191,10 @@ export const chatSessionsAPI = {
     apiClient.post<SessionCreateResponse>('/api/chat-sessions/sessions'),
   get: async (id: string) =>
     apiClient.get<
-      ChatSession & { messages: StructuredChatMessage[] }
+      ChatSession & {
+        messages: StructuredChatMessage[];
+        attachments: Attachment[];
+      }
     >(`/api/chat-sessions/sessions/${id}`),
   sendMessage: async (id: string, content: string) =>
     apiClient.post<SessionMessageResponse>(
@@ -189,6 +205,21 @@ export const chatSessionsAPI = {
     apiClient.post<{ ticketId: string; alreadyEscalated?: boolean }>(
       `/api/chat-sessions/sessions/${id}/escalate`,
     ),
+  listAttachments: async (id: string) =>
+    apiClient.get<Attachment[]>(`/api/chat-sessions/sessions/${id}/attachments`),
+  uploadAttachments: async (id: string, files: File[]) => {
+    const fd = new FormData();
+    files.forEach(f => fd.append('files', f));
+    return apiClient.post<Attachment[]>(
+      `/api/chat-sessions/sessions/${id}/attachments`,
+      fd,
+      { headers: { 'Content-Type': 'multipart/form-data' } },
+    );
+  },
+  attachmentUrl: (sessionId: string, attId: string) =>
+    `${API_URL}/api/chat-sessions/sessions/${sessionId}/attachments/${attId}/download`,
+  ticketAttachmentUrl: (ticketId: string, attId: string) =>
+    `${API_URL}/api/support/tickets/${ticketId}/attachments/${attId}/download`,
 };
 
 export default apiClient;

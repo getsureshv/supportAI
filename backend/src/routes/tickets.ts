@@ -1,6 +1,9 @@
 import { Router, Request, Response } from 'express';
+import { createReadStream } from 'fs';
+import { PrismaClient } from '@prisma/client';
 import { ticketsService } from '../services/TicketsService.js';
 
+const prisma = new PrismaClient();
 const router = Router();
 
 router.post('/tickets', async (req: Request, res: Response) => {
@@ -53,6 +56,20 @@ router.post('/tickets/:id/messages', async (req: Request, res: Response) => {
     const { role, content } = req.body;
     const msg = await ticketsService.addMessage(req.params.id, role || 'user', content);
     res.status(201).json(msg);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/tickets/:id/attachments/:attId/download', async (req: Request, res: Response) => {
+  try {
+    const att = await prisma.attachment.findFirst({
+      where: { id: req.params.attId, ticketId: req.params.id },
+    });
+    if (!att) return res.status(404).json({ error: 'Not found' });
+    res.setHeader('Content-Type', att.mimeType);
+    res.setHeader('Content-Disposition', `inline; filename="${att.fileName}"`);
+    createReadStream(att.storagePath).pipe(res);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

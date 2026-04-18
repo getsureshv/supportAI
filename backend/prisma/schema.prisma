@@ -60,6 +60,7 @@ model Ticket {
   messages    TicketMessage[]
   sla         TicketSLA?
   chatSession ChatSession?
+  attachments Attachment[]
 
   @@index([userId])
   @@index([assignedToId])
@@ -108,9 +109,10 @@ model ChatSession {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  user     User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  ticket   Ticket?              @relation(fields: [ticketId], references: [id], onDelete: SetNull)
-  messages ChatSessionMessage[]
+  user        User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ticket      Ticket?              @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  messages    ChatSessionMessage[]
+  attachments Attachment[]
 
   @@index([userId])
   @@map("chat_sessions")
@@ -128,4 +130,29 @@ model ChatSessionMessage {
 
   @@index([sessionId])
   @@map("chat_session_messages")
+}
+
+// Uploaded evidence. Starts attached to a ChatSession; when the session is
+// escalated to a Ticket, we set ticketId as well so the file is visible on
+// both the chat and the ticket.
+model Attachment {
+  id        String  @id @default(uuid())
+  sessionId String? @map("session_id")
+  ticketId  String? @map("ticket_id")
+
+  fileName            String  @map("file_name")
+  mimeType            String  @map("mime_type")
+  fileSize            Int     @map("file_size")
+  storagePath         String  @map("storage_path")
+  transcription       String?
+  transcriptionStatus String  @default("pending") @map("transcription_status")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  session ChatSession? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  ticket  Ticket?      @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+
+  @@index([sessionId])
+  @@index([ticketId])
+  @@map("attachments")
 }

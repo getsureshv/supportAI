@@ -1,15 +1,27 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 interface ChatChipsProps {
   options: string[];
   disabled?: boolean;
   onPick: (value: string) => void;
+  onFiles?: (files: File[]) => void;
+  uploading?: boolean;
 }
 
-export default function ChatChips({ options, disabled, onPick }: ChatChipsProps) {
+const ACCEPT =
+  'image/jpeg,image/png,image/gif,image/webp,application/pdf,text/plain,text/markdown,.txt,.md';
+
+export default function ChatChips({
+  options,
+  disabled,
+  onPick,
+  onFiles,
+  uploading,
+}: ChatChipsProps) {
   const [typed, setTyped] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const submitTyped = (e: React.FormEvent) => {
     e.preventDefault();
@@ -17,6 +29,13 @@ export default function ChatChips({ options, disabled, onPick }: ChatChipsProps)
     if (!v) return;
     setTyped('');
     onPick(v);
+  };
+
+  const handleFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    if (!files.length) return;
+    onFiles?.(files);
+    e.target.value = '';
   };
 
   return (
@@ -40,7 +59,32 @@ export default function ChatChips({ options, disabled, onPick }: ChatChipsProps)
         ))}
       </div>
 
-      <form onSubmit={submitTyped} className="flex gap-2">
+      <form onSubmit={submitTyped} className="flex gap-2 items-center">
+        {onFiles && (
+          <>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept={ACCEPT}
+              multiple
+              onChange={handleFiles}
+              className="hidden"
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={disabled || uploading}
+              title="Attach evidence (images, PDFs, text)"
+              className="px-3 py-2 rounded-lg border border-gray-300 text-gray-600 hover:border-cricket-green hover:text-cricket-green disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {uploading ? (
+                <span className="spinner inline-block">⟳</span>
+              ) : (
+                '📎'
+              )}
+            </button>
+          </>
+        )}
         <input
           type="text"
           value={typed}
