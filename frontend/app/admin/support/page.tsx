@@ -3,33 +3,42 @@
 import { useEffect, useState } from 'react';
 import { adminAPI } from '@/lib/api';
 import Link from 'next/link';
+import UserHeader from '@/components/UserHeader';
+import { useRequireAuth } from '@/lib/useRequireAuth';
 
 export default function AdminDashboardPage() {
+  const { user, loading: authLoading } = useRequireAuth();
   const [stats, setStats] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!user?.profileComplete) return;
     loadDashboard();
-  }, []);
+  }, [user]);
 
   const loadDashboard = async () => {
     try {
       const response = await adminAPI.getDashboard();
       setStats(response.data);
     } catch (err: any) {
-      setError(err.message || 'Failed to load dashboard');
+      setError(err.response?.data?.error || err.message || 'Failed to load dashboard');
     } finally {
       setLoading(false);
     }
   };
 
-  if (loading) {
-    return <div className="text-center py-8 text-gray-600">Loading dashboard...</div>;
+  if (authLoading || !user?.profileComplete) {
+    return <div className="p-12 text-center text-gray-500">Loading…</div>;
   }
 
-  if (error) {
-    return <div className="bg-red-50 text-red-800 p-4 rounded-lg">{error}</div>;
+  if (loading) {
+    return (
+      <div className="min-h-screen">
+        <UserHeader />
+        <div className="text-center py-8 text-gray-600">Loading dashboard...</div>
+      </div>
+    );
   }
 
   const getSLAHealthColor = (health: number) => {
@@ -39,13 +48,19 @@ export default function AdminDashboardPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h1 className="text-3xl font-bold text-cricket-green">Support Dashboard</h1>
-        <Link href="/admin/support/tickets" className="btn btn-primary">
-          View All Tickets
-        </Link>
-      </div>
+    <div className="min-h-screen">
+      <UserHeader />
+      <main className="max-w-5xl mx-auto px-6 py-8 space-y-6">
+        {error && (
+          <div className="bg-red-50 text-red-800 p-4 rounded-lg">{error}</div>
+        )}
+
+        <div className="flex justify-between items-center">
+          <h1 className="text-2xl font-bold text-cricket-green">Support Dashboard</h1>
+          <Link href="/admin/support/tickets" className="btn btn-primary text-sm">
+            View All Tickets
+          </Link>
+        </div>
 
       {/* Metrics Grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -114,6 +129,7 @@ export default function AdminDashboardPage() {
           <li>✅ Email Notifications: Enabled</li>
         </ul>
       </div>
+      </main>
     </div>
   );
 }

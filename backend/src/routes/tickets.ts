@@ -3,9 +3,6 @@ import { ticketsService } from '../services/TicketsService.js';
 
 const router = Router();
 
-// Demo: all requests use a fixed demo user id
-const DEMO_USER_ID = 'demo-user-1';
-
 router.post('/tickets', async (req: Request, res: Response) => {
   try {
     const { category, subject, description, priority, matchId } = req.body;
@@ -13,7 +10,7 @@ router.post('/tickets', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Missing required fields' });
     }
     const ticket = await ticketsService.createTicket({
-      userId: DEMO_USER_ID,
+      userId: req.user!.id,
       category,
       subject,
       description,
@@ -30,7 +27,7 @@ router.get('/tickets', async (req: Request, res: Response) => {
   try {
     const { status, category, priority } = req.query;
     const tickets = await ticketsService.listTickets({
-      userId: DEMO_USER_ID,
+      userId: req.user!.id,
       status: status as string | undefined,
       category: category as string | undefined,
       priority: priority as string | undefined,

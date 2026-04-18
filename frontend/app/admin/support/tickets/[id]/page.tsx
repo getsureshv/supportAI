@@ -4,10 +4,13 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { ticketsAPI, adminAPI, Ticket } from '@/lib/api';
+import UserHeader from '@/components/UserHeader';
+import { useRequireAuth } from '@/lib/useRequireAuth';
 
 const STATUSES = ['open', 'in_progress', 'resolved', 'closed'];
 
 export default function AdminTicketDetailPage() {
+  const { user, loading: authLoading } = useRequireAuth();
   const params = useParams<{ id: string }>();
   const ticketId = params.id;
 
@@ -29,8 +32,9 @@ export default function AdminTicketDetailPage() {
   };
 
   useEffect(() => {
+    if (!user?.profileComplete) return;
     load();
-  }, [ticketId]);
+  }, [ticketId, user]);
 
   const updateStatus = async (status: string) => {
     setSaving(true);
@@ -46,17 +50,31 @@ export default function AdminTicketDetailPage() {
     }
   };
 
-  if (loading) return <div className="text-center py-12 text-gray-600">Loading ticket…</div>;
+  if (authLoading || !user?.profileComplete) {
+    return <div className="p-12 text-center text-gray-500">Loading…</div>;
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen">
+        <UserHeader />
+        <div className="text-center py-12 text-gray-600">Loading ticket…</div>
+      </div>
+    );
+  }
 
   if (error || !ticket) {
     return (
-      <div className="space-y-4">
-        <Link href="/admin/support/tickets" className="text-cricket-green hover:underline">
-          ← Back to queue
-        </Link>
-        <div className="bg-red-50 border border-red-200 p-4 rounded-lg text-red-800">
-          {error || 'Ticket not found'}
-        </div>
+      <div className="min-h-screen">
+        <UserHeader />
+        <main className="max-w-3xl mx-auto px-6 py-8 space-y-4">
+          <Link href="/admin/support/tickets" className="text-cricket-green hover:underline">
+            ← Back to queue
+          </Link>
+          <div className="bg-red-50 border border-red-200 p-4 rounded-lg text-red-800">
+            {error || 'Ticket not found'}
+          </div>
+        </main>
       </div>
     );
   }
@@ -66,7 +84,9 @@ export default function AdminTicketDetailPage() {
   const formatDate = (d?: string) => (d ? new Date(d).toLocaleString() : '—');
 
   return (
-    <div className="space-y-6">
+    <div className="min-h-screen">
+      <UserHeader />
+      <main className="max-w-4xl mx-auto px-6 py-8 space-y-6">
       <div className="flex items-center justify-between">
         <Link href="/admin/support/tickets" className="text-cricket-green hover:underline">
           ← Back to queue
@@ -153,6 +173,7 @@ export default function AdminTicketDetailPage() {
           </div>
         )}
       </div>
+      </main>
     </div>
   );
 }

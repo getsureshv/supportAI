@@ -9,29 +9,43 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  name      String
-  role      String   @default("user")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id              String   @id @default(uuid())
+  googleId        String?  @unique @map("google_id")
+  email           String   @unique
+  name            String
+  picture         String?
+  team            String?
+  role            String   @default("captain") // captain | player | umpire | team_manager | other | admin | support
+  profileComplete Boolean  @default(false) @map("profile_complete")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
 
-  ticketsCreated  Ticket[] @relation("CreatedBy")
-  ticketsAssigned Ticket[] @relation("AssignedTo")
+  ticketsCreated  Ticket[]      @relation("CreatedBy")
+  ticketsAssigned Ticket[]      @relation("AssignedTo")
+  chatSessions    ChatSession[]
 
   @@map("users")
 }
 
+model Team {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  division  String? // e.g. "Division A", optional grouping
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("teams")
+}
+
 model Ticket {
-  id           String   @id @default(uuid())
-  userId       String   @map("user_id")
-  assignedToId String?  @map("assigned_to_id")
+  id           String  @id @default(uuid())
+  userId       String  @map("user_id")
+  assignedToId String? @map("assigned_to_id")
 
   subject     String
   description String
   category    String
   priority    String
-  status      String @default("open")
+  status      String  @default("open")
 
   matchId       String? @map("match_id")
   interviewTurn Int     @default(1) @map("interview_turn")
@@ -41,10 +55,11 @@ model Ticket {
   updatedAt  DateTime  @updatedAt @map("updated_at")
   resolvedAt DateTime? @map("resolved_at")
 
-  user       User            @relation("CreatedBy", fields: [userId], references: [id], onDelete: Cascade)
-  assignedTo User?           @relation("AssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
-  messages   TicketMessage[]
-  sla        TicketSLA?
+  user        User            @relation("CreatedBy", fields: [userId], references: [id], onDelete: Cascade)
+  assignedTo  User?           @relation("AssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+  messages    TicketMessage[]
+  sla         TicketSLA?
+  chatSession ChatSession?
 
   @@index([userId])
   @@index([assignedToId])
@@ -83,4 +98,34 @@ model TicketSLA {
   ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
 
   @@map("ticket_slas")
+}
+
+model ChatSession {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  ticketId  String?  @unique @map("ticket_id")
+  resolved  Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user     User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ticket   Ticket?              @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  messages ChatSessionMessage[]
+
+  @@index([userId])
+  @@map("chat_sessions")
+}
+
+model ChatSessionMessage {
+  id        String   @id @default(uuid())
+  sessionId String   @map("session_id")
+  role      String // 'user' | 'assistant'
+  content   String
+  options   String? // JSON array for assistant chip options
+  createdAt DateTime @default(now()) @map("created_at")
+
+  session ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("chat_session_messages")
 }

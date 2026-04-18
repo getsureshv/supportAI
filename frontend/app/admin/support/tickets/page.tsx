@@ -3,8 +3,11 @@
 import { useEffect, useState } from 'react';
 import { adminAPI, Ticket } from '@/lib/api';
 import Link from 'next/link';
+import UserHeader from '@/components/UserHeader';
+import { useRequireAuth } from '@/lib/useRequireAuth';
 
 export default function AdminTicketQueuePage() {
+  const { user, loading: authLoading } = useRequireAuth();
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -14,8 +17,9 @@ export default function AdminTicketQueuePage() {
   });
 
   useEffect(() => {
+    if (!user?.profileComplete) return;
     loadTickets();
-  }, [filters]);
+  }, [filters, user]);
 
   const loadTickets = async () => {
     try {
@@ -44,9 +48,15 @@ export default function AdminTicketQueuePage() {
     return <span className="sla-badge on-track">✅ ON TRACK</span>;
   };
 
+  if (authLoading || !user?.profileComplete) {
+    return <div className="p-12 text-center text-gray-500">Loading…</div>;
+  }
+
   return (
-    <div className="space-y-6">
-      <h1 className="text-3xl font-bold text-cricket-green">Support Ticket Queue</h1>
+    <div className="min-h-screen">
+      <UserHeader />
+      <main className="max-w-6xl mx-auto px-6 py-8 space-y-6">
+      <h1 className="text-2xl font-bold text-cricket-green">Support Ticket Queue</h1>
 
       {/* Filters */}
       <div className="bg-white p-4 rounded-lg shadow-md flex gap-4">
@@ -133,6 +143,7 @@ export default function AdminTicketQueuePage() {
           </table>
         </div>
       )}
+      </main>
     </div>
   );
 }
