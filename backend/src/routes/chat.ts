@@ -1,7 +1,9 @@
 import { Router, Request, Response } from 'express';
+import { PrismaClient } from '@prisma/client';
 import { chatService, ChatMessage } from '../services/ChatService.js';
 import { ticketsService } from '../services/TicketsService.js';
 
+const prisma = new PrismaClient();
 const router = Router();
 
 router.get('/support/:ticketId', async (req: Request, res: Response) => {
@@ -17,26 +19,30 @@ router.get('/support/:ticketId', async (req: Request, res: Response) => {
   const send = (data: any) => res.write(`data: ${JSON.stringify(data)}\n\n`);
 
   try {
-    const ticket = await ticketsService.getTicket(ticketId);
+    const ticket = await prisma.ticket.findUnique({
+      where: { id: ticketId },
+      include: {
+        messages: { orderBy: { createdAt: 'asc' } },
+        attachments: { orderBy: { createdAt: 'asc' } },
+      },
+    });
     if (!ticket) {
       send({ type: 'error', error: 'Ticket not found' });
       return res.end();
     }
 
-    const history = ticket.messages || [];
-
+    const history = ticket.messages;
     const messages: ChatMessage[] = [];
 
-    // If this is the first chat turn, seed with the ticket context so the AI
-    // doesn't ask the user to re-explain what they already put in the form.
     if (history.length === 0) {
+      const attachmentSection = buildAttachmentSection(ticket.attachments);
       const seed = `I just created a support ticket with these details:
 - Category: ${ticket.category}
 - Priority: ${ticket.priority}
 - Subject: ${ticket.subject}
-- Description: ${ticket.description}
+- Description: ${ticket.description}${attachmentSection}
 
-Please acknowledge what I've shared, then ask any follow-up questions you need (match date, people involved, evidence available, etc.) to help resolve this.`;
+Please acknowledge what I've shared (referencing any uploaded evidence), then ask any follow-up questions you need (match date, people involved, additional evidence) to help resolve this.`;
       messages.push({ role: 'user', content: seed });
       await ticketsService.addMessage(ticketId, 'user', seed, true).catch(() => null);
     } else {
@@ -70,5 +76,20 @@ Please acknowledge what I've shared, then ask any follow-up questions you need (
     res.end();
   }
 });
+
+function buildAttachmentSection(attachments: Array<{ fileName: string; mimeType: string; transcription: string | null; transcriptionStatus: string }>): string {
+  if (!attachments.length) return '';
+  const parts = attachments.map((a, i) => {
+    const header = `\n### Attachment ${i + 1}: ${a.fileName} (${a.mimeType})`;
+    if (a.transcriptionStatus === 'completed' && a.transcription) {
+      return `${header}\n${a.transcription}`;
+    }
+    if (a.transcriptionStatus === 'pending') {
+      return `${header}\n[Transcription in progress — the user may mention contents that haven't been processed yet]`;
+    }
+    return `${header}\n[Transcription unavailable]`;
+  });
+  return `\n\n## Uploaded evidence:${parts.join('\n')}`;
+}
 
 export default router;

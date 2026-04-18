@@ -23,6 +23,7 @@ export interface Ticket {
   resolvedAt?: string;
   messages?: TicketMessage[];
   sla?: TicketSLA;
+  attachments?: TicketAttachment[];
 }
 
 export interface TicketMessage {
@@ -31,6 +32,17 @@ export interface TicketMessage {
   role: 'user' | 'assistant' | 'support';
   content: string;
   isInternal: boolean;
+  createdAt: string;
+}
+
+export interface TicketAttachment {
+  id: string;
+  ticketId: string;
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+  transcription: string | null;
+  transcriptionStatus: 'pending' | 'completed' | 'failed';
   createdAt: string;
 }
 
@@ -75,6 +87,19 @@ export const ticketsAPI = {
   sendMessage: async (ticketId: string, data: SendMessageRequest) => {
     return apiClient.post(`/api/support/tickets/${ticketId}/messages`, data);
   },
+
+  uploadAttachments: async (ticketId: string, files: File[]) => {
+    const formData = new FormData();
+    files.forEach(f => formData.append('files', f));
+    return apiClient.post<TicketAttachment[]>(
+      `/api/support/tickets/${ticketId}/attachments`,
+      formData,
+      { headers: { 'Content-Type': 'multipart/form-data' } },
+    );
+  },
+
+  attachmentUrl: (ticketId: string, attachmentId: string) =>
+    `${API_URL}/api/support/tickets/${ticketId}/attachments/${attachmentId}/download`,
 
   streamChat: (ticketId: string, message: string) => {
     return fetch(`${API_URL}/api/chat/support/${ticketId}?message=${encodeURIComponent(message)}`, {

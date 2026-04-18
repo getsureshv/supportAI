@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { ticketsAPI, Ticket } from '@/lib/api';
 import TicketChat from '@/components/TicketChat';
+import AttachmentList from '@/components/AttachmentList';
 
 export default function TicketDetailPage() {
   const params = useParams<{ id: string }>();
@@ -78,6 +79,10 @@ export default function TicketDetailPage() {
           </div>
         )}
       </div>
+
+      {ticket.attachments && ticket.attachments.length > 0 && (
+        <AttachmentList ticketId={ticket.id} attachments={ticket.attachments} />
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className="md:col-span-2">

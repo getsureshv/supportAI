@@ -55,6 +55,9 @@ prisma/dev.db-journal
 # AWS
 .aws-sam/
 
+# Uploaded user files (runtime-generated)
+backend/uploads/
+
 # Lock files (optional - comment out if you want to track)
 # package-lock.json
 # yarn.lock

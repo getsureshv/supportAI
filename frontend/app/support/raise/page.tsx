@@ -10,16 +10,34 @@ export default function RaiseTicketPage() {
   const [ticketId, setTicketId] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [uploadStatus, setUploadStatus] = useState<string | null>(null);
 
-  const handleCreateTicket = async (data: CreateTicketRequest) => {
+  const handleCreateTicket = async (data: CreateTicketRequest, files: File[]) => {
     setIsCreating(true);
     setError(null);
+    setUploadStatus(null);
     try {
       const response = await ticketsAPI.create(data);
-      setTicketId(response.data.id);
+      const id = response.data.id;
+
+      if (files.length > 0) {
+        setUploadStatus(`Uploading ${files.length} file${files.length > 1 ? 's' : ''}…`);
+        try {
+          await ticketsAPI.uploadAttachments(id, files);
+          setUploadStatus(`Uploaded — transcription runs in the background.`);
+        } catch (uploadErr: any) {
+          setError(
+            `Ticket created, but file upload failed: ${
+              uploadErr.response?.data?.error || uploadErr.message
+            }`,
+          );
+        }
+      }
+
+      setTicketId(id);
       setTicketData(data);
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to create ticket');
+      setError(err.response?.data?.error || err.response?.data?.message || 'Failed to create ticket');
     } finally {
       setIsCreating(false);
     }
@@ -31,6 +49,7 @@ export default function RaiseTicketPage() {
         <div className="bg-green-50 border border-green-200 p-4 rounded-lg mb-6">
           <h2 className="text-green-900 font-bold text-lg">✓ Ticket Created Successfully</h2>
           <p className="text-green-800">Ticket ID: <span className="font-mono font-bold">{ticketId}</span></p>
+          {uploadStatus && <p className="text-green-800 text-sm mt-1">📎 {uploadStatus}</p>}
         </div>
 
         <div className="grid grid-cols-3 gap-6">

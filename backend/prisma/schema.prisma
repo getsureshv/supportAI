@@ -41,16 +41,36 @@ model Ticket {
   updatedAt  DateTime  @updatedAt @map("updated_at")
   resolvedAt DateTime? @map("resolved_at")
 
-  user       User            @relation("CreatedBy", fields: [userId], references: [id], onDelete: Cascade)
-  assignedTo User?           @relation("AssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
-  messages   TicketMessage[]
-  sla        TicketSLA?
+  user        User               @relation("CreatedBy", fields: [userId], references: [id], onDelete: Cascade)
+  assignedTo  User?              @relation("AssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+  messages    TicketMessage[]
+  sla         TicketSLA?
+  attachments TicketAttachment[]
 
   @@index([userId])
   @@index([assignedToId])
   @@index([status])
   @@index([category])
   @@map("tickets")
+}
+
+model TicketAttachment {
+  id       String @id @default(uuid())
+  ticketId String @map("ticket_id")
+
+  fileName      String  @map("file_name")
+  mimeType      String  @map("mime_type")
+  fileSize      Int     @map("file_size")
+  storagePath   String  @map("storage_path")
+  transcription String?
+  transcriptionStatus String  @default("pending") @map("transcription_status")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId])
+  @@map("ticket_attachments")
 }
 
 model TicketMessage {
